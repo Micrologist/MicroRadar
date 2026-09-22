@@ -46,10 +46,16 @@ network problem (a `no-cors` fetch returns an opaque response fine). Full eviden
 is in the "API verification" section of `docs/plan-m1.md`.
 
 Because of that, and by an explicit decision on 2026-09-22, requests go through a
-small Cloudflare Worker in `proxy/` that forwards to these two hosts and adds the
-header. `index.html` has a single `PROXY_BASE` constant pointing at it; see
+small proxy in `proxy/` that forwards to these two hosts and adds the header.
+`index.html` has a single `PROXY_BASE` constant pointing at it; see
 `proxy/README.md` to deploy. This overrides the original "no backend" rule, which
 was written before the CORS behaviour was known.
+
+The proxy must not run on Cloudflare Workers: adsb.lol rate-limits per IP and
+Workers egress from shared addresses whose limit is already spent, which returns
+`429` to us. Use a host that gives it its own outbound address (Render, Railway,
+Fly.io). `worker.js` holds the logic and is web-standard; `server.mjs` and the
+`Dockerfile` just run it on an ordinary host.
 
 Keep the proxy dumb: GET only, these two upstreams only, `/v2/*` only, known
 origins only, no keys, no caching, no added features. It must forward a descriptive

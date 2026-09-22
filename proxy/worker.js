@@ -43,6 +43,17 @@ function corsHeaders(origin) {
 
 export default {
   async fetch(request) {
+    // Path shape: /<source>/v2/<whatever>  e.g. /adsb.lol/v2/point/51.5/-0.12/40
+    const { pathname, search } = new URL(request.url);
+
+    // Health check, before the origin check: platform probes send no Origin.
+    if (pathname === '/' || pathname === '/health') {
+      return new Response(JSON.stringify({ ok: true, upstreams: Object.keys(UPSTREAMS) }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+      });
+    }
+
     const origin = request.headers.get('Origin');
     const allowed = allowOrigin(origin);
 
@@ -62,8 +73,6 @@ export default {
       return new Response('Origin not allowed', { status: 403 });
     }
 
-    // Path shape: /<source>/v2/<whatever>  e.g. /adsb.lol/v2/point/51.5/-0.12/40
-    const { pathname, search } = new URL(request.url);
     const m = pathname.match(/^\/([^/]+)(\/v2\/.*)$/);
     if (!m) {
       return new Response('Expected /<source>/v2/...', {

@@ -582,6 +582,41 @@ Neither fix is known to be the cause of the 429 — they reduce the request rate
 and stop it being made worse, but if Cloudflare's shared egress IP is the real
 problem they will not resolve it on their own.
 
+### Round 2 (2026-09-22): the 429 is Cloudflare's shared egress IP
+
+With `workers.dev` allowlisted, the deployed Worker could finally be called from
+the sandbox, and the cause is settled. At the same moments:
+
+| from | result |
+| --- | --- |
+| the deployed Worker → adsb.lol | **429 on 5 of 6** probes; body is nginx's own 429 page |
+| this sandbox → adsb.lol | **200 on 6 of 6** |
+
+The 429 is adsb.lol's nginx, passed through the Worker (our ACAO header is on
+it), not Cloudflare's edge. It is not our request rate — 12 *simultaneous*
+requests from the sandbox all returned 200. The sandbox is itself a datacentre
+IP, so it is not "cloud IPs are blocked" either: it is Cloudflare Workers'
+shared egress specifically, whose per-IP budget at adsb.lol is spent by other
+customers. Nothing we do to our own polling can recover it.
+
+Their terms of service (at `/api/openapi.json`, not `/openapi.json`) document no
+rate limit at all, say the API is free, and ask that anyone using it "for
+production purposes" get in touch. Also worth noting for later: *"in the future,
+you will require an API key which you can get by feeding to adsb.lol"* — that
+would collide with the "no API keys" line in `CLAUDE.md` if it ever lands.
+
+No alternative aggregator rescues this: `api.airplanes.live` still 403s and
+`api.adsb.fi` 404s on every path tried including its root.
+
+**Decision:** move the proxy to a host with its own outbound address. `worker.js`
+was already web-standard, so it is unchanged as the logic; `server.mjs` bridges
+`node:http` to it and a `Dockerfile` covers container hosts, which between them
+cover Render, Railway and Fly.io. A `/health` endpoint was added ahead of the
+origin check, because platform probes send no `Origin` and were getting 403.
+Verified on Node against the live API: 189 aircraft render, `/health` answers
+without an `Origin`, and the origin/upstream/path/method guards still return
+403/404/404/405.
+
 **Still unverified:** everything iPhone-specific, plus the deployed Worker itself.
 This sandbox's egress policy denies CONNECT to `workers.dev`, so the live Worker
 could not be called from here; the runs above stand `proxy/worker.js` in for it

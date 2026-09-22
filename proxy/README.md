@@ -14,24 +14,71 @@ This is a deliberate relaxation of the "no backend" rule in `CLAUDE.md`. It is t
 only server-side piece in the project, it holds no keys or secrets, and the site
 still works by opening `index.html` once `PROXY_BASE` points at a deployed Worker.
 
-## Deploy (dashboard, no tooling — works from an iPad)
+## Files
 
-1. Sign in at <https://dash.cloudflare.com> → **Workers & Pages** → **Create** →
-   **Workers** → **Create Worker**.
-2. Name it something like `microradar-proxy`, then **Deploy** the placeholder.
-3. **Edit code**, select everything in the editor, paste the contents of
-   `worker.js` over it, and **Deploy** again.
-4. Copy the worker URL — `https://microradar-proxy.<your-subdomain>.workers.dev`.
-5. Put it in `index.html` as `PROXY_BASE`, **without a trailing slash**:
+- `worker.js` — the proxy itself, written against the web platform
+  (`Request`/`Response`/`URL`/`fetch`). Single source of truth for the logic.
+- `server.mjs` — bridges `node:http` to `worker.js` for hosts that run a Node
+  process. No dependencies, no build step.
+- `Dockerfile` — for hosts that take a container.
 
-   ```js
-   const PROXY_BASE = 'https://microradar-proxy.yourname.workers.dev';
-   ```
+## Which host
 
-6. Commit and push. GitHub Pages redeploys and the aircraft list should fill in.
+The proxy was first deployed as a Cloudflare Worker, and adsb.lol answered
+**HTTP 429** to it: their nginx rate-limits per IP, and Workers egress from
+addresses shared with every other Cloudflare customer, so the limit was already
+spent by strangers. Measured 2026-09-22: 5 of 6 requests through the Worker were
+429 while 6 of 6 direct requests from an ordinary datacentre IP were 200. It is
+Cloudflare's shared egress specifically, not cloud IPs in general — so a host
+that gives the proxy its own outbound address fixes it.
 
-The free plan allows 100,000 requests/day. MicroRadar polls every 8 s, so it uses
-about 450/hour — you would have to leave it open for nine hours a day to notice.
+| host | deploy from | cold start | cost |
+| --- | --- | --- | --- |
+| **Render** | browser, GitHub-connected | free tier sleeps after ~15 min idle, then ~50 s to wake | free |
+| **Railway** | browser, GitHub-connected | no sleep on the hobby plan | ~$5/mo |
+| **Fly.io** | `flyctl` CLI | ~1 s with `auto_start_machines` | free allowance |
+
+Render is the easiest from an iPad and Fly.io wakes fastest. On Render's free
+tier the first load after a quiet spell will show a couple of failed polls while
+the service wakes — the app backs off and recovers on its own, so it heals, it
+just looks ugly for a minute.
+
+### Render / Railway (browser only)
+
+1. New **Web Service**, connect this GitHub repo.
+2. Root directory `proxy`, environment **Node**.
+3. Build command: leave empty. Start command: `node server.mjs`.
+4. Health check path `/health`.
+5. Deploy, then copy the service URL.
+
+(Both can equally use the `Dockerfile` — pick Docker as the environment and
+leave the commands blank.)
+
+### Fly.io (needs the CLI)
+
+```sh
+cd proxy
+fly launch --no-deploy      # accept the Dockerfile, skip databases
+fly deploy
+```
+
+### Then, in both cases
+
+Put the URL in `index.html` as `PROXY_BASE`, **without a trailing slash**:
+
+```js
+const PROXY_BASE = 'https://microradar-proxy.onrender.com';
+```
+
+Commit and push; GitHub Pages redeploys and the aircraft list should fill in.
+Check the host is up first by opening `<url>/health`, which needs no `Origin`
+header and should return `{"ok":true,...}`.
+
+### Cloudflare Workers (kept for reference)
+
+`worker.js` still runs unmodified on Workers — dashboard → **Workers & Pages** →
+**Create Worker** → paste → **Deploy**. Usable as a fallback, but expect the 429s
+described above.
 
 ## What it allows
 
