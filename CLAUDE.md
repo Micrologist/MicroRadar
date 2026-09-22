@@ -15,10 +15,17 @@ Keep everything small, boring and finishable.
   the only server-side code in the project and nothing else may be added to it.
 - **Single `index.html`** with inline CSS and JS. Split into a couple of files only if
   it genuinely gets unwieldy.
-- **Libraries** only via `<script>` tags from cdnjs, pinned to an exact version.
-  three.js is fine (use the UMD/global build). Nothing else unless there's a strong reason.
+- **Libraries** only via `<script>` tags from a CDN, pinned to an exact version:
+  cdnjs, or jsdelivr's npm mirror when cdnjs doesn't carry the files. The 3D
+  renderer is **CesiumJS** (decided 2026-09-22, replacing the original three.js
+  idea): the global `Cesium.js` build plus its `Widgets/widgets.css`, with
+  `CESIUM_BASE_URL` set to the same folder so it finds its `Workers/` and `Assets/`.
+  Nothing else unless there's a strong reason.
 - **No API keys, no secrets.** Everything except the CORS proxy runs in the browser,
-  and the proxy holds no credentials of any kind.
+  and the proxy holds no credentials of any kind. That includes Cesium ion: no ion
+  token, no ion imagery, no ion terrain, no geocoder. Base map tiles come from
+  OpenStreetMap (no key, attribution kept visible); the ground is the plain WGS84
+  ellipsoid.
 - **Must work in Safari on iPhone and iPad** — that's the real target device.
   Desktop Chrome is for convenience only.
 - **HTTPS matters**: geolocation and device orientation only work on HTTPS (GitHub Pages
@@ -68,6 +75,10 @@ If a future aggregator serves proper CORS headers, delete the proxy and go direc
 - Convert every aircraft to local ENU metres relative to the user:
   east/north via equirectangular approximation (fine at these ranges),
   up = altitude in metres (ft × 0.3048). Prefer `alt_geom`, fall back to `alt_baro`.
+  ENU is for the list (distance, bearing) and the extrapolation maths. Cesium takes
+  geodetic coordinates directly — `Cartesian3.fromDegrees(lon, lat, altitude_m)`,
+  longitude first — so the 3D scene never goes through ENU; there is no terrain,
+  so height 0 is the ellipsoid and `alt_geom` (a WGS84 height) fits it as is.
 - Between polls, extrapolate positions from `gs`, `track`, `baro_rate` so movement
   is smooth. Reset on each new fix.
 
@@ -76,13 +87,17 @@ If a future aggregator serves proper CORS headers, delete the proxy and go direc
 1. **Vertical slice, no 3D.** Geolocate, poll the API, render a plain text list of
    aircraft (callsign, type, altitude, distance, bearing). Confirm CORS. Confirm it
    works on iPhone Safari via GitHub Pages.
-2. **3D scene.** three.js: flat ground plane, user at origin, aircraft as simple
-   markers (e.g. a cone pointing along `track`) with a vertical stalk to the ground
-   and a callsign label. Orbit/pan camera. Compass directions on the ground.
+2. **3D scene.** CesiumJS: a globe with OpenStreetMap tiles and no terrain, the
+   user marked at their position, aircraft as point markers with a line ahead along
+   `track`, a vertical stalk to the ground and a callsign label. Camera orbits
+   around the user (`camera.lookAt`). Range rings and compass letters on the ground.
+   The text list from milestone 1 stays underneath.
 3. **Viewfinder mode.** Use `DeviceOrientationEvent` to aim the camera where the
-   phone is pointing. On iOS this needs `DeviceOrientationEvent.requestPermission()`
-   called from a user tap, so add an explicit "Enable viewfinder" button.
-   Show a label for whatever aircraft is closest to the centre of the view.
+   phone is pointing: put the Cesium camera at the user's position and set its
+   heading/pitch/roll from the device. On iOS this needs
+   `DeviceOrientationEvent.requestPermission()` called from a user tap, so add an
+   explicit "Enable viewfinder" button. Show a label for whatever aircraft is
+   closest to the centre of the view.
 4. **Polish, only if still fun.** Tap an aircraft for details, altitude colour
    coding, remembered last position in `localStorage` (guarded with try/catch,
    must work when empty).
