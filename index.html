@@ -212,7 +212,7 @@
         state.lastPollAt = now;
         state.lastError = null;
         setStatus('OK · ' + src.name);
-        console.table(state.aircraft);
+        render();
       } catch (err) {
         const why = err.name === 'AbortError' ? 'timed out' : err.message;
         state.lastError = src.name + ': ' + why;
@@ -258,10 +258,113 @@
       };
     }
 
+    // ---- geometry -------------------------------------------------------
+
+    // Equirectangular local tangent plane, metres east / north / up.
+    // Milestone 2 feeds this straight into three.js, so keep it pure.
+    function toENU(lat, lon, altFt, me) {
+      const dLat = (lat - me.lat) * Math.PI / 180;
+      const dLon = (lon - me.lon) * Math.PI / 180;
+      const cosLat = Math.cos(me.lat * Math.PI / 180);
+      return {
+        e: EARTH_R * dLon * cosLat,
+        n: EARTH_R * dLat,
+        u: (altFt ?? 0) * FT_TO_M,
+      };
+    }
+
+    const COMPASS = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                     'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+
+    function compassPoint(bearing) {
+      return COMPASS[Math.round(bearing / 22.5) % 16];
+    }
+
+    // ---- display --------------------------------------------------------
+
+    function describe(ac, me, now) {
+      const p = ac;  // step 5 replaces this with extrapolate(ac, now)
+      const enu = toENU(p.lat, p.lon, p.altFt, me);
+      const distKm = Math.hypot(enu.e, enu.n) / 1000;
+      const bearing = (Math.atan2(enu.e, enu.n) * 180 / Math.PI + 360) % 360;
+      const ageS = Math.round((now - ac.fixedAt) / 1000);
+
+      let vsLabel = 'level';
+      if (ac.vsFpm > 200) vsLabel = 'climbing';
+      else if (ac.vsFpm < -200) vsLabel = 'descending';
+
+      let altText;
+      if (p.onGround) altText = 'on ground';
+      else if (typeof p.altFt === 'number') altText = Math.round(p.altFt).toLocaleString('en-GB') + ' ft';
+      else altText = 'alt ?';
+
+      let vsText = vsLabel;
+      if (vsLabel !== 'level') {
+        vsText = (ac.vsFpm > 0 ? '↑ ' : '↓ ') + vsLabel + ' ' +
+                 Math.abs(Math.round(ac.vsFpm)).toLocaleString('en-GB') + ' ft/min';
+      }
+
+      return {
+        distKm,
+        callsign: p.callsign,
+        type: p.type || '—',
+        altText,
+        distText: distKm.toFixed(1) + ' km',
+        bearingText: compassPoint(bearing) + ' (' + String(Math.round(bearing) % 360).padStart(3, '0') + '°)',
+        vsText,
+        gsText: typeof p.gsKt === 'number' ? Math.round(p.gsKt) + ' kt' : 'speed ?',
+        ageText: 'seen ' + ageS + 's ago',
+      };
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, (c) => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+      ));
+    }
+
+    function render() {
+      renderMe();
+      const list = $('aircraft');
+
+      if (!state.me) {
+        list.innerHTML = '';
+        return;
+      }
+
+      const now = Date.now();
+      const rows = state.aircraft
+        .map((ac) => describe(ac, state.me, now))
+        .sort((a, b) => a.distKm - b.distKm);
+
+      if (!rows.length) {
+        list.innerHTML = '<li class="empty">No aircraft in range.</li>';
+      } else {
+        // Dumb on purpose: rebuild the whole list every tick.
+        list.innerHTML = rows.map((r) => (
+          '<li><div class="row1">' +
+            '<span class="call">' + esc(r.callsign) + '</span>' +
+            '<span class="type">' + esc(r.type) + '</span>' +
+            '<span>' + esc(r.altText) + '</span>' +
+            '<span>' + esc(r.distText) + '</span>' +
+            '<span>' + esc(r.bearingText) + '</span>' +
+          '</div><div class="row2">' +
+            esc(r.vsText) + ' · ' + esc(r.gsText) + ' · ' + esc(r.ageText) +
+          '</div></li>'
+        )).join('');
+      }
+
+      const src = SOURCES[state.sourceIndex].name;
+      $('meta').textContent = state.lastPollAt
+        ? `${rows.length} aircraft · updated ${Math.round((now - state.lastPollAt) / 1000)}s ago · source ${src}`
+        : `No data yet · source ${src}`;
+    }
+
     // ---- page load ------------------------------------------------------
 
     $('btn-locate').addEventListener('click', locate);
     setSource(state.sourceIndex);
+    setInterval(render, TICK_MS);
     setStatus('Tap "Find me" to start');
   </script>
 </body>
