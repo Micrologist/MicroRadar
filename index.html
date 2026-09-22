@@ -280,10 +280,30 @@
       return COMPASS[Math.round(bearing / 22.5) % 16];
     }
 
+    // Advance a fix along its track so the numbers move between polls. Returns a
+    // copy; state.aircraft always holds the last real fix and is replaced wholesale
+    // on every poll, which is the "reset on each new fix" from CLAUDE.md.
+    function extrapolate(ac, now) {
+      if (ac.gsKt === null || ac.track === null || ac.onGround) return ac;
+
+      const dt = Math.min(Math.max((now - ac.fixedAt) / 1000, 0), STALE_S);
+      const dist = ac.gsKt * KT_TO_MPS * dt;
+      const trackRad = ac.track * Math.PI / 180;
+      const dN = dist * Math.cos(trackRad);
+      const dE = dist * Math.sin(trackRad);
+
+      const lat = ac.lat + (dN / EARTH_R) * 180 / Math.PI;
+      const cosLat = Math.cos(ac.lat * Math.PI / 180);
+      const lon = ac.lon + (dE / (EARTH_R * cosLat)) * 180 / Math.PI;
+      const altFt = typeof ac.altFt === 'number' ? ac.altFt + ac.vsFpm * dt / 60 : ac.altFt;
+
+      return { ...ac, lat, lon, altFt };
+    }
+
     // ---- display --------------------------------------------------------
 
     function describe(ac, me, now) {
-      const p = ac;  // step 5 replaces this with extrapolate(ac, now)
+      const p = extrapolate(ac, now);
       const enu = toENU(p.lat, p.lon, p.altFt, me);
       const distKm = Math.hypot(enu.e, enu.n) / 1000;
       const bearing = (Math.atan2(enu.e, enu.n) * 180 / Math.PI + 360) % 360;
