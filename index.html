@@ -110,7 +110,7 @@
     // JSON itself is fine (see docs/plan-m1.md, "API verification"). Requests go
     // through a small Cloudflare Worker that adds the header. Deploy it once and
     // put its URL here, with no trailing slash — see proxy/README.md.
-    const PROXY_BASE = '';   // e.g. 'https://microradar-proxy.yourname.workers.dev'
+    const PROXY_BASE = 'https://microradar-proxy.throbbing-mountain-edd5.workers.dev';
 
     const SOURCES = [
       { name: 'adsb.lol', path: (lat, lon, r) => `/adsb.lol/v2/point/${lat}/${lon}/${r}` },

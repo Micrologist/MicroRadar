@@ -539,10 +539,18 @@ real page with headless Chromium at a 390x844 viewport and a mocked Westminster 
   `Load failed`. The fallback source stays dead until they grant access; adsb.lol
   works today.
 
-**Still unverified:** everything iPhone-specific. All of the above is desktop
-Chromium at phone size, against a Worker running locally rather than on Cloudflare.
-The remaining steps are the owner's: deploy the Worker, set `PROXY_BASE`, push, and
-run acceptance criteria 1-10 on the actual phone.
+The Worker was then deployed to
+`https://microradar-proxy.throbbing-mountain-edd5.workers.dev` and `PROXY_BASE` set
+to it. The committed `index.html` was re-run unmodified and builds
+`/adsb.lol/v2/point/51.5007/-0.1246/40` — correct shape, no double slash from a
+trailing base — rendering 173 aircraft with no errors.
+
+**Still unverified:** everything iPhone-specific, plus the deployed Worker itself.
+This sandbox's egress policy denies CONNECT to `workers.dev`, so the live Worker
+could not be called from here; the runs above stand `proxy/worker.js` in for it
+locally, against the live aggregator. All of it is desktop Chromium at phone size.
+The remaining step is the owner's: open the Pages site on the phone and run
+acceptance criteria 1-10.
 
 ### What was verified in the sandbox
 
