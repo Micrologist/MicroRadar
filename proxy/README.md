@@ -3,9 +3,10 @@
 A tiny proxy that sits in front of the ADS-B aggregators and adds the CORS header
 they don't send. Two interchangeable builds of the same ~100 lines:
 
-- `worker.js` — Cloudflare Worker (the original; currently what `PROXY_BASE` points at).
+- `worker.js` — Cloudflare Worker (the original; still deployed, its URL is in a
+  comment next to `PROXY_BASE`).
 - `valtown.ts` — Val Town HTTP val, added so the proxy can run from a different
-  egress IP. Through the Worker, adsb.lol answered `HTTP 429` on the phone, and the
+  egress IP. Currently what `PROXY_BASE` points at, as a test. Through the Worker, adsb.lol answered `HTTP 429` on the phone, and the
   leading theory is that Cloudflare Workers share their outbound IPs with every
   other Workers customer (see `docs/plan-m1.md`, "On the phone, round 1").
 
