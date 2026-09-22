@@ -92,7 +92,97 @@
   </div>
 
   <script>
-    // Milestone 1 — see docs/plan-m1.md
+    'use strict';
+
+    // ---- constants (docs/plan-m1.md) ------------------------------------
+
+    const POLL_MS = 8000;        // never below 5000; the aggregators allow 1 req/s
+    const RADIUS_NM = 40;        // CLAUDE.md says 30-60 nm
+    const FT_TO_M = 0.3048;
+    const KT_TO_MPS = 0.514444;
+    const FPM_TO_MPS = 0.00508;  // ft/min -> m/s (kept for milestone 2)
+    const STALE_S = 60;          // drop aircraft whose position is older than this
+    const TICK_MS = 500;         // re-render interval for extrapolation
+    const EARTH_R = 6371000;     // metres
+
+    const SOURCES = [
+      { name: 'adsb.lol', url: (lat, lon, r) => `https://api.adsb.lol/v2/point/${lat}/${lon}/${r}` },
+      { name: 'airplanes.live', url: (lat, lon, r) => `https://api.airplanes.live/v2/point/${lat}/${lon}/${r}` },
+    ];
+
+    // ---- state ----------------------------------------------------------
+
+    const state = {
+      me: null,          // { lat, lon, accuracy, at }
+      sourceIndex: 0,
+      aircraft: [],      // normalised aircraft from the last successful poll
+      lastPollAt: 0,
+      lastError: null,
+      pollTimer: null,
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    // ---- status ---------------------------------------------------------
+
+    function setStatus(text, isError = false) {
+      const el = $('status');
+      el.textContent = text;
+      el.classList.toggle('error', !!isError);
+    }
+
+    // ---- geolocation ----------------------------------------------------
+
+    function locate() {
+      if (!navigator.geolocation) {
+        setStatus('Geolocation not available', true);
+        return;
+      }
+      setStatus('Finding you…');
+      navigator.geolocation.getCurrentPosition(onFix, onGeoError, {
+        enableHighAccuracy: false,
+        timeout: 15000,
+        maximumAge: 60000,
+      });
+    }
+
+    function onFix(pos) {
+      state.me = {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        at: Date.now(),
+      };
+      $('btn-locate').textContent = 'Refresh position';
+      setStatus('Got a fix');
+      renderMe();
+    }
+
+    function onGeoError(err) {
+      const msgs = {
+        1: 'Location permission denied',
+        2: 'Position unavailable',
+        3: 'Location timed out',
+      };
+      setStatus(msgs[err.code] || ('Location error: ' + err.message), true);
+    }
+
+    function renderMe() {
+      if (!state.me) {
+        $('me').textContent = 'No position yet.';
+        return;
+      }
+      const { lat, lon, accuracy, at } = state.me;
+      const ageS = Math.round((Date.now() - at) / 1000);
+      $('me').textContent =
+        `${lat.toFixed(4)}, ${lon.toFixed(4)} · ±${Math.round(accuracy)} m · fix ${ageS}s ago`;
+    }
+
+    // ---- page load ------------------------------------------------------
+
+    $('btn-locate').addEventListener('click', locate);
+    $('btn-source').textContent = SOURCES[state.sourceIndex].name;
+    setStatus('Tap "Find me" to start');
   </script>
 </body>
 </html>
