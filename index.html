@@ -4,6 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>MicroRadar</title>
+
+  <!-- CesiumJS, pinned. CESIUM_BASE_URL must be the folder holding Cesium.js,
+       Widgets/, Workers/ and Assets/ side by side; Cesium loads its workers and
+       assets relative to it. Verified 2026-09-22: cdnjs carries all of them at
+       this version, with Access-Control-Allow-Origin: * (which Cesium needs,
+       because it fetches those assets cross-origin). -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cesium/1.145.0/Widgets/widgets.css">
+  <script>window.CESIUM_BASE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/cesium/1.145.0/';</script>
+
   <style>
     :root {
       color-scheme: dark;
@@ -35,6 +44,17 @@
     #status { margin-top: 4px; font-size: 16px; color: var(--dim); }
     #status.error { color: var(--error); }
 
+    /* Not 100vh: iOS Safari's toolbars make that taller than the visible area. */
+    #scene {
+      height: 60vh;
+      min-height: 300px;
+      margin-top: 12px;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #1b2a1e;
+    }
+    #scene.hidden { display: none; }
+
     #controls { display: flex; gap: 8px; margin: 12px 0; }
     button {
       flex: 1 1 auto;
@@ -57,6 +77,17 @@
     }
     #meta { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); }
 
+    /* Cesium injects .cesium-credit-* markup in here: OSM's attribution, which
+       their tile policy requires, plus Cesium's own logo. */
+    #credits {
+      margin-top: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12px;
+      color: var(--dim);
+    }
+    #credits a { color: var(--dim); }
+    #credits img { height: 14px; vertical-align: middle; }
+
     #aircraft { list-style: none; margin: 12px 0 0; padding: 0; }
     #aircraft li {
       padding: 8px 0;
@@ -76,11 +107,14 @@
   <div class="wrap">
     <header>
       <h1>MicroRadar</h1>
-      <div id="status">Starting…</div>
+      <div id="status">Loading 3D library…</div>
     </header>
+
+    <div id="scene"></div>
 
     <div id="controls">
       <button id="btn-locate" type="button">Find me</button>
+      <button id="btn-recentre" type="button">Recentre</button>
     </div>
 
     <div id="me">No position yet.</div>
@@ -88,7 +122,13 @@
     <ol id="aircraft"></ol>
 
     <footer id="meta">No data yet.</footer>
+
+    <div id="credits"></div>
   </div>
+
+  <!-- After the markup above, so the header and list paint before this 1.75 MB
+       (gzipped) download. No defer, no modules: the global Cesium is the API. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cesium/1.145.0/Cesium.js"></script>
 
   <script>
     'use strict';
@@ -99,11 +139,26 @@
     const RADIUS_NM = 40;        // CLAUDE.md says 30-60 nm
     const FT_TO_M = 0.3048;
     const KT_TO_MPS = 0.514444;
-    const FPM_TO_MPS = 0.00508;  // ft/min -> m/s (kept for milestone 2)
     const STALE_S = 60;          // drop aircraft whose position is older than this
     const MAX_BACKOFF_MS = 60000;  // ceiling when a source keeps failing
     const TICK_MS = 500;         // re-render interval for extrapolation
     const EARTH_R = 6371000;     // metres
+
+    // ---- constants (docs/plan-m2.md, the 3D scene) -----------------------
+
+    const IMAGERY_URL = 'https://tile.openstreetmap.org/';  // no key; '' for a plain globe
+    const TARGET_FPS = 30;       // smooth enough, half the battery of 60
+    const CAMERA_RANGE_M = 60000;   // how far the camera sits from the user
+    const CAMERA_PITCH_DEG = -45;   // looking down at 45°
+    const MIN_ZOOM_M = 300;
+    const MAX_ZOOM_M = 400000;
+    const RING_KM = [10, 25, 50];   // range rings on the ground
+    const RING_HEIGHT_M = 5;     // just above the ellipsoid, so chords never dip below it
+    const RING_SEGMENTS = 72;
+    const NOSE_S = 30;           // heading line = where it will be in this many seconds
+    const AC_COLOR = '#ffa500';      // airborne
+    const GROUND_COLOR = '#8b93ad';  // on the ground, or altitude unknown
+    const ME_COLOR = '#6ea8ff';      // the user; same as the CSS accent
 
     // The aggregators send no Access-Control-Allow-Origin header on their /v2/*
     // routes, so a browser is never allowed to read the response even though the
@@ -128,6 +183,24 @@
       lastError: null,
       pollTimer: null,
       failures: 0,       // consecutive failed polls, drives the backoff
+    };
+
+    // Everything Cesium-side lives here, so the data in `state` never mixes with
+    // the rendering. Empty and inert until initScene() succeeds.
+    const view3d = {
+      ready: false,
+      error: null,        // why there is no 3D, for the status line
+      viewer: null,
+      points: null,       // PointPrimitiveCollection — aircraft dots and the user
+      labels: null,       // LabelCollection — callsigns
+      lines: null,        // PolylineCollection — stalks and heading lines
+      ground: null,       // PolylineCollection — range rings
+      groundLabels: null, // LabelCollection — N/E/S/W and ring distances
+      mePoint: null,
+      marks: new Map(),   // hex -> { point, label, stalk, nose }
+      stalkMaterial: null,
+      noseMaterial: null,
+      warned: new Set(),  // hexes already complained about, so a bad one warns once
     };
 
     const $ = (id) => document.getElementById(id);
@@ -415,6 +488,75 @@
         : `No data yet · source ${src}`;
     }
 
+    // ---- 3D scene (docs/plan-m2.md) --------------------------------------
+
+    // Creates the Cesium viewer. Never throws: on any failure it hides the scene,
+    // records why in view3d.error and returns false, so the milestone 1 list keeps
+    // working on a device with no WebGL or behind a content blocker.
+    function initScene() {
+      if (typeof Cesium === 'undefined') {
+        return failScene('3D library failed to load — list only');
+      }
+
+      try {
+        // No ion account, by CLAUDE.md: blank the built-in demo token first, so
+        // nothing can quietly fall back to it. Must happen before any Cesium
+        // object exists.
+        Cesium.Ion.defaultAccessToken = '';
+
+        const viewer = new Cesium.Viewer('scene', {
+          baseLayer: IMAGERY_URL
+            ? new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url: IMAGERY_URL }))
+            : false,
+          terrain: undefined,   // plain ellipsoid; Cesium World Terrain needs ion
+          animation: false, timeline: false, geocoder: false, homeButton: false,
+          sceneModePicker: false, baseLayerPicker: false, navigationHelpButton: false,
+          fullscreenButton: false, infoBox: false, selectionIndicator: false,
+          skyBox: false, skyAtmosphere: false,
+          creditContainer: 'credits',
+          targetFrameRate: TARGET_FPS,
+        });
+
+        const scene = viewer.scene;
+        scene.globe.baseColor = Cesium.Color.fromCssColorString('#1b2a1e');
+        scene.globe.showGroundAtmosphere = false;
+        scene.fog.enabled = false;
+        scene.backgroundColor = Cesium.Color.fromCssColorString('#0b1020');
+        scene.screenSpaceCameraController.minimumZoomDistance = MIN_ZOOM_M;
+        scene.screenSpaceCameraController.maximumZoomDistance = MAX_ZOOM_M;
+
+        // Order matters only for what draws over what: rings first, then the
+        // lines, then the dots and their labels.
+        view3d.ground = scene.primitives.add(new Cesium.PolylineCollection());
+        view3d.groundLabels = scene.primitives.add(new Cesium.LabelCollection());
+        view3d.lines = scene.primitives.add(new Cesium.PolylineCollection());
+        view3d.points = scene.primitives.add(new Cesium.PointPrimitiveCollection());
+        view3d.labels = scene.primitives.add(new Cesium.LabelCollection());
+
+        // One material instance per kind of line: that is what lets the
+        // collection batch them into a single draw.
+        view3d.stalkMaterial = Cesium.Material.fromType('Color', {
+          color: Cesium.Color.fromCssColorString(AC_COLOR).withAlpha(0.4),
+        });
+        view3d.noseMaterial = Cesium.Material.fromType('Color', {
+          color: Cesium.Color.fromCssColorString(AC_COLOR),
+        });
+
+        view3d.viewer = viewer;
+        view3d.ready = true;
+        return true;
+      } catch (err) {
+        return failScene('3D unavailable (' + err.message + ') — list only');
+      }
+    }
+
+    function failScene(text) {
+      view3d.ready = false;
+      view3d.error = text;
+      $('scene').classList.add('hidden');
+      return false;
+    }
+
     // ---- background handling --------------------------------------------
 
     // iOS suspends timers in a backgrounded tab anyway; this keeps the first poll
@@ -433,9 +575,12 @@
     $('btn-locate').addEventListener('click', locate);
     document.addEventListener('visibilitychange', onVisibilityChange);
     setInterval(render, TICK_MS);
-    setStatus(PROXY_BASE
-      ? 'Tap "Find me" to start'
-      : 'No proxy configured — set PROXY_BASE in index.html (see proxy/README.md)', !PROXY_BASE);
+
+    const has3d = initScene();
+    setStatus(!PROXY_BASE
+        ? 'No proxy configured — set PROXY_BASE in index.html (see proxy/README.md)'
+        : has3d ? 'Tap "Find me" to start' : view3d.error,
+      !PROXY_BASE || !has3d);
   </script>
 </body>
 </html>
