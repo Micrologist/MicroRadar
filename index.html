@@ -102,6 +102,7 @@
     const KT_TO_MPS = 0.514444;
     const FPM_TO_MPS = 0.00508;  // ft/min -> m/s (kept for milestone 2)
     const STALE_S = 60;          // drop aircraft whose position is older than this
+    const MAX_BACKOFF_MS = 60000;  // ceiling when a source keeps failing
     const TICK_MS = 500;         // re-render interval for extrapolation
     const EARTH_R = 6371000;     // metres
 
@@ -126,6 +127,7 @@
       lastPollAt: 0,
       lastError: null,
       pollTimer: null,
+      failures: 0,       // consecutive failed polls, drives the backoff
     };
 
     const $ = (id) => document.getElementById(id);
@@ -190,13 +192,19 @@
 
     let loggedSample = false;
 
+    // Every call to startPolling() begins a new generation. An older poll that is
+    // still awaiting its fetch will find gen !== pollGen when it finishes and will
+    // not schedule anything, so taps and visibilitychange can't leave extra poll
+    // chains running in parallel — which quietly multiplied the request rate.
+    let pollGen = 0;
+
     function startPolling() {
       clearTimeout(state.pollTimer);
       state.pollTimer = null;
-      poll();
+      poll(++pollGen);
     }
 
-    async function poll() {
+    async function poll(gen) {
       if (!state.me) return;
       if (!PROXY_BASE) {
         setStatus('No proxy configured — set PROXY_BASE in index.html (see proxy/README.md)', true);
@@ -209,7 +217,13 @@
 
       try {
         const res = await fetch(url, { cache: 'no-store', signal: ctl.signal });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
+        if (!res.ok) {
+          // The proxy passes the aggregator's body through, and it usually says
+          // something useful ("rate limited", "contact us at..."). Show it.
+          let detail = '';
+          try { detail = (await res.text()).trim().replace(/\s+/g, ' ').slice(0, 120); } catch (e) { /* no body */ }
+          throw new Error('HTTP ' + res.status + (detail ? ' — ' + detail : ''));
+        }
         const json = await res.json();
         if (!Array.isArray(json.ac)) throw new Error('no aircraft array in response');
 
@@ -222,17 +236,26 @@
         state.aircraft = json.ac.map((raw) => normalise(raw, now)).filter(Boolean);
         state.lastPollAt = now;
         state.lastError = null;
+        state.failures = 0;
         setStatus('OK · ' + src.name);
         render();
       } catch (err) {
         const why = err.name === 'AbortError' ? 'timed out' : err.message;
+        state.failures++;
         state.lastError = src.name + ': ' + why;
-        setStatus(state.lastError, true);
+        setStatus(state.lastError + ' · retrying in ' + Math.round(nextDelayMs() / 1000) + 's', true);
         setSource((state.sourceIndex + 1) % SOURCES.length);  // try the other one next
       } finally {
         clearTimeout(abortTimer);
-        state.pollTimer = setTimeout(startPolling, POLL_MS);
+        if (gen === pollGen) state.pollTimer = setTimeout(startPolling, nextDelayMs());
       }
+    }
+
+    // Normal cadence while healthy; back off when a source keeps refusing, so a
+    // rate limit is not answered by hammering it every 8 seconds.
+    function nextDelayMs() {
+      if (!state.failures) return POLL_MS;
+      return Math.min(POLL_MS * Math.pow(2, state.failures), MAX_BACKOFF_MS);
     }
 
     function setSource(i) {

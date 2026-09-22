@@ -545,6 +545,43 @@ to it. The committed `index.html` was re-run unmodified and builds
 `/adsb.lol/v2/point/51.5007/-0.1246/40` — correct shape, no double slash from a
 trailing base — rendering 173 aircraft with no errors.
 
+### On the phone, round 1 (2026-09-22): `HTTP 429` / `HTTP 403`
+
+First run against the deployed Worker gave `adsb.lol: HTTP 429` and
+`airplanes.live: HTTP 403`. Both are *readable* statuses, which is itself the
+proof that the CORS fix works — the app can only show a status code if it was
+allowed to read the response, and only the Worker adds the header that permits
+that. The old failure mode was the opaque `Load failed`.
+
+The 429 therefore came through the Worker from adsb.lol, not from Cloudflare's
+edge (a Cloudflare error page carries no ACAO and would have read as
+`Load failed`). It is also not our request rate: 12 *simultaneous* requests from
+a sandbox IP all returned 200, and adsb.lol sends no rate-limit headers. The
+remaining difference is the source IP — Cloudflare Workers egress from addresses
+shared with every other Workers customer. Unconfirmed, because this sandbox's
+egress policy denies `workers.dev` and the live Worker cannot be called from here.
+
+Two client-side faults were found and fixed while investigating:
+
+1. **Poll chains could multiply.** `startPolling()` cleared only the tracked
+   timer handle. An older `poll()` still awaiting its fetch would reach its
+   `finally` and schedule another timeout, leaving two chains running with one
+   handle tracked. Every `visibilitychange` or source tap during an in-flight
+   request could add another — and a phone backgrounds constantly. Reproduced:
+   three taps gave 6 requests per 30 s where one healthy chain gives 3-4. Fixed
+   with a generation counter, so only the current chain schedules; the same test
+   now gives 3.
+2. **A failure was answered at full cadence.** Errors kept polling every 8 s,
+   which is the worst possible response to a rate limit. Now backs off
+   8 → 16 → 32 → 60 s and resets on success.
+
+The app also shows the upstream body now, so a failure reads
+`adsb.lol: HTTP 429 — {"detail":"..."} · retrying in 16s` rather than a bare code.
+
+Neither fix is known to be the cause of the 429 — they reduce the request rate
+and stop it being made worse, but if Cloudflare's shared egress IP is the real
+problem they will not resolve it on their own.
+
 **Still unverified:** everything iPhone-specific, plus the deployed Worker itself.
 This sandbox's egress policy denies CONNECT to `workers.dev`, so the live Worker
 could not be called from here; the runs above stand `proxy/worker.js` in for it
