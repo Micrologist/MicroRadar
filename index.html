@@ -156,6 +156,7 @@
       $('btn-locate').textContent = 'Refresh position';
       setStatus('Got a fix');
       renderMe();
+      startPolling();
     }
 
     function onGeoError(err) {
@@ -178,10 +179,89 @@
         `${lat.toFixed(4)}, ${lon.toFixed(4)} · ±${Math.round(accuracy)} m · fix ${ageS}s ago`;
     }
 
+    // ---- polling --------------------------------------------------------
+
+    let loggedSample = false;
+
+    function startPolling() {
+      clearTimeout(state.pollTimer);
+      state.pollTimer = null;
+      poll();
+    }
+
+    async function poll() {
+      if (!state.me) return;
+      const src = SOURCES[state.sourceIndex];
+      const url = src.url(state.me.lat.toFixed(4), state.me.lon.toFixed(4), RADIUS_NM);
+      const ctl = new AbortController();
+      const abortTimer = setTimeout(() => ctl.abort(), 10000);
+
+      try {
+        const res = await fetch(url, { cache: 'no-store', signal: ctl.signal });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        if (!Array.isArray(json.ac)) throw new Error('no aircraft array in response');
+
+        if (!loggedSample && json.ac.length) {
+          loggedSample = true;
+          console.log('raw aircraft sample from ' + src.name + ':', json.ac[0]);
+        }
+
+        const now = Date.now();
+        state.aircraft = json.ac.map((raw) => normalise(raw, now)).filter(Boolean);
+        state.lastPollAt = now;
+        state.lastError = null;
+        setStatus('OK · ' + src.name);
+        console.table(state.aircraft);
+      } catch (err) {
+        const why = err.name === 'AbortError' ? 'timed out' : err.message;
+        state.lastError = src.name + ': ' + why;
+        setStatus(state.lastError, true);
+        setSource((state.sourceIndex + 1) % SOURCES.length);  // try the other one next
+      } finally {
+        clearTimeout(abortTimer);
+        state.pollTimer = setTimeout(startPolling, POLL_MS);
+      }
+    }
+
+    function setSource(i) {
+      state.sourceIndex = i;
+      $('btn-source').textContent = SOURCES[i].name;
+    }
+
+    // ---- normalising ----------------------------------------------------
+
+    function normalise(raw, now) {
+      if (typeof raw.lat !== 'number' || typeof raw.lon !== 'number') return null;
+      const seenPos = typeof raw.seen_pos === 'number' ? raw.seen_pos : 0;
+      if (seenPos > STALE_S) return null;
+
+      // Prefer geometric altitude; alt_baro may be a number or the string "ground".
+      let altFt = null;
+      if (typeof raw.alt_geom === 'number') altFt = raw.alt_geom;
+      else if (raw.alt_baro === 'ground') altFt = 0;
+      else if (typeof raw.alt_baro === 'number') altFt = raw.alt_baro;
+
+      return {
+        hex: raw.hex,
+        callsign: (raw.flight || '').trim() || raw.r || raw.hex,
+        type: raw.t || '',
+        reg: raw.r || '',
+        lat: raw.lat,
+        lon: raw.lon,
+        altFt: altFt,
+        onGround: raw.alt_baro === 'ground',
+        gsKt: typeof raw.gs === 'number' ? raw.gs : null,
+        track: typeof raw.track === 'number' ? raw.track : null,
+        vsFpm: typeof raw.baro_rate === 'number' ? raw.baro_rate : 0,
+        fixedAt: now - seenPos * 1000,
+      };
+    }
+
     // ---- page load ------------------------------------------------------
 
     $('btn-locate').addEventListener('click', locate);
-    $('btn-source').textContent = SOURCES[state.sourceIndex].name;
+    setSource(state.sourceIndex);
     setStatus('Tap "Find me" to start');
   </script>
 </body>
