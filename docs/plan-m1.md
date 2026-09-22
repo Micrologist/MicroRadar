@@ -589,6 +589,53 @@ locally, against the live aggregator. All of it is desktop Chromium at phone siz
 The remaining step is the owner's: open the Pages site on the phone and run
 acceptance criteria 1-10.
 
+### Round 2 (2026-09-22): the same proxy on Val Town — mostly 200, occasional 429
+
+To test the shared-egress-IP theory without touching the Worker, `proxy/valtown.ts`
+is `worker.js` with Val Town's export shape, deployed at
+`https://micrologist--25362770b69011f19e211607ee4eb77e.web.val.run`, and
+`PROXY_BASE` now points at it (the Worker URL is kept in a comment beside it).
+`*.val.run` was allowlisted in the sandbox's egress policy, so unlike the Worker
+this one was measured live.
+
+Called from the sandbox with `Origin: https://micrologist.github.io`, exactly the
+URL the app builds (`/adsb.lol/v2/point/51.5007/-0.1246/40`):
+
+- **At the app's cadence, one request every 8 s for a minute: 7 of 8 returned
+  200** with `access-control-allow-origin: https://micrologist.github.io`,
+  `vary: Origin`, `cache-control: no-store` and 149–154 aircraft. **One returned
+  429.** Its body is a bare nginx `429 Too Many Requests` page and it carries no
+  `Retry-After` — so it is adsb.lol's nginx per-IP `limit_req`, not their
+  application's JSON rate limiter, and it passed through the val with the CORS
+  header intact, exactly as designed.
+- A burst of five in ~15 s also produced one 429 (the fifth).
+- **Control, same minute, direct from the sandbox's own IP: six requests in six
+  seconds, all 200.** So the limit is per source IP, and the val's egress IP is
+  shared with other Val Town tenants whose traffic consumes the same bucket.
+- Guards: no `Origin` → `403 Origin not allowed`; `http://localhost:8000` is
+  echoed back; `airplanes.live` through the val is still its own
+  `403 "Please contact us at contact@airplanes.live..."`.
+- val.run answers with `server: cloudflare` and `x-ratelimit-limit: 5000` /
+  `-remaining` / `-reset` headers. Those are Val Town's own (adsb.lol sends none,
+  and the val forwards only `Content-Type`); 5000 per window is Val Town's ceiling
+  on the val, against ~450 requests/hour from the app.
+
+**Reading.** The shared-IP theory holds: adsb.lol limits by source IP, a
+datacentre IP shared with other tenants trips it, and Val Town's pool is simply
+much less busy than Cloudflare Workers' — the Worker 429'd on the phone's first
+request, the val 429s roughly one poll in eight. That is workable with the
+backoff already in place: a 429 costs one poll, the last list stays on screen
+with its age shown, and the next attempt succeeds. It is not fixable from our
+side short of a proxy with an IP nobody else uses, and adsb.lol's README says an
+API key scheme is coming, which would settle it properly.
+
+One thing worth changing later: on a 429 the app flips to `airplanes.live`, which
+is dead (403), so a single 429 currently costs three polls (8 → 16 → 32 s) before
+adsb.lol is tried again. Not backing off *and* switching for a 429 would halve
+that. Left as is for now; it is a tuning decision, not a fault.
+
+Still unverified: the phone itself.
+
 ### What was verified in the sandbox
 
 Headless Chromium (Playwright, 390x844 viewport) against `python3 -m http.server`,

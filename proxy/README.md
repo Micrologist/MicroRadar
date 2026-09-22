@@ -5,10 +5,12 @@ they don't send. Two interchangeable builds of the same ~100 lines:
 
 - `worker.js` — Cloudflare Worker (the original; still deployed, its URL is in a
   comment next to `PROXY_BASE`).
-- `valtown.ts` — Val Town HTTP val, added so the proxy can run from a different
-  egress IP. Currently what `PROXY_BASE` points at, as a test. Through the Worker, adsb.lol answered `HTTP 429` on the phone, and the
-  leading theory is that Cloudflare Workers share their outbound IPs with every
-  other Workers customer (see `docs/plan-m1.md`, "On the phone, round 1").
+- `valtown.ts` — Val Town HTTP val, currently what `PROXY_BASE` points at.
+  adsb.lol rate-limits by source IP, and Cloudflare Workers' outbound IPs are
+  shared with every other Workers customer: through the Worker the phone got
+  `HTTP 429` on its first request. Val Town's egress is shared too, but far less
+  busy — measured at the app's cadence, about one poll in eight gets a 429, which
+  the app's backoff absorbs (see `docs/plan-m1.md`, "Round 2").
 
 They differ only in the export at the bottom. Keep them in step.
 
@@ -61,10 +63,11 @@ adsb.lol actually returns through it you need a request that carries
 `Origin: https://micrologist.github.io` — the app itself is the easiest way, and
 since the status line shows the upstream body, a 429 will explain itself there.
 
-Free-plan request and runtime limits were not verifiable from the sandbox that
-wrote this (val.town is blocked there); check the pricing page. For scale,
-MicroRadar's polling is ~450 requests/hour while the page is open and zero when
-it isn't.
+Limits: val.run answers every request with `x-ratelimit-limit: 5000` and a
+`remaining`/`reset` pair, so that is Val Town's per-window ceiling on the val. For
+scale, MicroRadar's polling is ~450 requests/hour while the page is open and zero
+when it isn't. Check the pricing page for the plan's daily total; it could not be
+read from the sandbox that wrote this.
 
 ## What it allows
 
