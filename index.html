@@ -218,10 +218,17 @@
       try {
         const res = await fetch(url, { cache: 'no-store', signal: ctl.signal });
         if (!res.ok) {
-          // The proxy passes the aggregator's body through, and it usually says
-          // something useful ("rate limited", "contact us at..."). Show it.
+          // The proxy passes the aggregator's body through. JSON errors say
+          // something useful ({"detail":"..."}); nginx sends an HTML page whose
+          // <title> is the useful part ("429 Too Many Requests"), and the status
+          // line already shows the code, so drop it from the front.
           let detail = '';
-          try { detail = (await res.text()).trim().replace(/\s+/g, ' ').slice(0, 120); } catch (e) { /* no body */ }
+          try {
+            const body = (await res.text()).trim();
+            const title = body.match(/<title>([^<]*)<\/title>/i);
+            detail = (title ? title[1] : body.replace(/<[^>]*>/g, ' '))
+              .replace(/\s+/g, ' ').trim().replace(/^\d{3}\s+/, '').slice(0, 120);
+          } catch (e) { /* no body */ }
           throw new Error('HTTP ' + res.status + (detail ? ' — ' + detail : ''));
         }
         const json = await res.json();
