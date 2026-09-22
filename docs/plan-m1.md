@@ -345,29 +345,161 @@ limited to what runs without network:
 - **Font zoom on tap.** iOS Safari zooms into inputs under 16px; there are no inputs
   in M1, but keep body text at 16px anyway.
 
-## Results (fill in after implementation)
+## Results
 
-_Written by the implementation session. The sandbox has no route to either
-aggregator, so everything below marked **UNVERIFIED** still needs a real device._
+_Bullets written by the implementation session, then corrected on 2026-09-22 by a
+session whose sandbox could finally reach the API hosts. The CORS question is now
+**answered, and the answer is bad**: see "API verification" below._
 
-- **CORS: UNVERIFIED.** The implementation sandbox blocks both API hosts the same
-  way the planning sandbox did — the egress proxy answers CONNECT with HTTP 403,
-  so no request ever leaves the machine. That is a sandbox policy, not a CORS
-  result: nothing here either confirms or contradicts the aggregators' headers.
-  The first real `fetch()` from `https://micrologist.github.io/MicroRadar/` is
-  still the open question, and it is the first thing to check on the phone. If
-  both hosts fail with a CORS error there, stop and report per `CLAUDE.md`; do
-  not add a proxy.
-- **Which source answered first, typical response time: UNVERIFIED.** No live call
-  was made.
-- **Sample raw aircraft object from the console: UNVERIFIED.** `poll()` logs the
-  first raw entry of the first successful response once
-  (`raw aircraft sample from <source>:`). Open Safari's Web Inspector against the
-  phone, or check the console on desktop, and paste it here.
-- **Fields that were missing or surprising: UNVERIFIED.** Specifically still open:
-  how often `alt_geom` is present, whether `flight` really is space-padded, and
-  what `seen_pos` looks like for MLAT-only targets.
-- **iPhone Safari observations: UNVERIFIED.** All device checks are pending.
+- **CORS: VERIFIED — blocked, on every host tried.** `https://api.adsb.lol/v2/point/...`
+  answers **HTTP 200 with a full, correct 87 KB JSON body**, but sends **no
+  `Access-Control-Allow-Origin` header at all**, so a browser is not allowed to
+  read it. A real cross-origin `fetch()` from origin `https://micrologist.github.io`
+  in headless Chromium 141 fails with `TypeError: Failed to fetch` and the console
+  message: `Access to fetch at 'https://api.adsb.lol/v2/point/51.5/-0.12/40' from
+  origin 'https://micrologist.github.io' has been blocked by CORS policy: No
+  'Access-Control-Allow-Origin' header is present on the requested resource.`
+  `api.airplanes.live` and `api.adsb.one` additionally answer 403, and
+  `api.adsb.fi` has no `/v2/point` route (404) — all three likewise with no ACAO.
+  This exactly reproduces the phone symptom: Safari's `TypeError` for a
+  CORS-blocked `fetch()` reads **"Load failed"** where Chromium's reads "Failed to
+  fetch", which is why the status line showed "Load failed" for both sources.
+  **Per `CLAUDE.md` this is a stop-and-report, not something to code around.** No
+  proxy was added and none should be.
+- **Which source answered first, typical response time.** In the browser, **none** —
+  all four are blocked before the body is readable. Server-side (plain `curl`, no
+  browser), only `api.adsb.lol` answers: 0.74–0.93 s for ~87 KB / 179 aircraft at
+  40 nm, measured through the sandbox egress proxy, so treat that as an upper
+  bound on the real figure.
+- **Sample raw aircraft object: VERIFIED** (captured with `curl`, because no
+  browser is permitted to read this body). `api.adsb.lol/v2/point/51.5/-0.12/40`,
+  an airliner with the full field set:
+
+  ```json
+  {
+    "hex": "4ca61d", "type": "adsb_icao", "flight": "RYR7ZW  ",
+    "r": "EI-DWP", "t": "B738",
+    "alt_baro": 15475, "alt_geom": 16525,
+    "gs": 366.2, "ias": 296, "tas": 378, "mach": 0.592,
+    "wd": 356, "ws": 14, "oat": -5, "tat": 14,
+    "track": 321.1, "track_rate": 0.47, "roll": 8.61,
+    "mag_heading": 321.15, "true_heading": 322.1,
+    "baro_rate": 1920, "geom_rate": 1920,
+    "squawk": "4625", "emergency": "none", "category": "A3",
+    "nav_qnh": 1013.6, "nav_altitude_mcp": 16992,
+    "nav_altitude_fms": 34000, "nav_heading": 319.22,
+    "lat": 51.140706, "lon": -0.973511,
+    "nic": 8, "rc": 186, "seen_pos": 0.302, "version": 2,
+    "nic_baro": 1, "nac_p": 8, "nac_v": 1, "sil": 3,
+    "sil_type": "perhour", "gva": 1, "sda": 2,
+    "alert": 0, "spi": 0, "mlat": [], "tisb": [],
+    "messages": 8035, "seen": 0.0, "rssi": -8.8,
+    "dst": 38.568, "dir": 236.4
+  }
+  ```
+
+  Top level is `{ "ac": [...], "msg": "No error", "now": 1790082228501,
+  "total": 179, "ctime": ..., "ptime": 0 }` — `now`/`ctime` are epoch
+  **milliseconds**, and `total` is just the length of `ac`.
+
+- **Fields that were missing or surprising: VERIFIED.** Presence counts over one
+  live response, 179 aircraft within 40 nm of 51.5/-0.12:
+
+  | field | present | note |
+  | --- | --- | --- |
+  | `hex`, `lat`, `lon`, `seen_pos` | 100% | always there — the fields M1 depends on most |
+  | `alt_baro` | 99% | **54 of 179 (30%) are the string `"ground"`**, as the plan assumed |
+  | `flight` | 97% | space-padded, confirmed (`"RYR7ZW  "`); the 3% without it need the `r`/`hex` fallback |
+  | `gs` | 95% | |
+  | `r` / `t` | 94% / 93% | |
+  | `track` | **68%** | |
+  | `alt_geom` | **53%** | |
+
+  Three surprises worth carrying into M2:
+
+  1. **`alt_geom` is the minority case (53%), not the norm.** `CLAUDE.md` says
+     "prefer `alt_geom`, fall back to `alt_baro`" — that fallback is the path
+     taken for nearly half of all aircraft, so it is the hot path, not an edge case.
+  2. **`track` is absent on 32% of aircraft.** Seven of those carry `calc_track`
+     (a track the aggregator derived) instead. `extrapolate()` already no-ops
+     without `track`, which is correct, but M2 may want `calc_track` as a fallback
+     so those targets still point somewhere sensible.
+  3. **The API already returns `dst` (nautical miles from the query point) and
+     `dir` (bearing from it).** M1 computes both itself via `toENU()`. Observed
+     `dst` ranged 2.2–39.98 nm for a 40 nm request, so the radius is honoured
+     exactly. These are a free cross-check on the ENU maths, not a replacement —
+     M2 needs the full 3D vector regardless.
+
+  Also note `type` (`adsb_icao` 131, `mlat` 32, `adsb_icao_nt` 15, `adsb_other` 1)
+  is the *reception* method and has nothing to do with `t`, the airframe type
+  (`B738`). Easy to confuse when reading the JSON. `seen_pos` for MLAT targets is
+  small (0.6–20 s), so the `STALE_S` filter does not quietly discard them.
+
+- **iPhone Safari observations: still UNVERIFIED**, and now mostly moot for M1 —
+  the app cannot get data on any device until the CORS problem is resolved. The
+  reported "Load failed" on the phone is fully explained by the finding above.
+
+### API verification (2026-09-22)
+
+A dedicated session with `api.adsb.lol`, `api.airplanes.live`, `api.adsb.one` and
+`api.adsb.fi` allowlisted in the environment's egress policy. The earlier
+CONNECT 403s are gone; these are real responses.
+
+**Server-side (`curl`, `Origin: https://micrologist.github.io`, `/v2/point/51.5/-0.12/40`):**
+
+| host | status | `Access-Control-Allow-Origin` | body |
+| --- | --- | --- | --- |
+| `api.adsb.lol` | **200** | **absent** | valid JSON, 179 aircraft, ~87 KB |
+| `api.airplanes.live` | 403 | absent | `{"error": "Please contact us at contact@airplanes.live. Your email MUST include any links, a description of the project, and any information you deem appropriate."}` |
+| `api.adsb.one` | 403 | absent | Cloudflare "Attention Required!" HTML |
+| `api.adsb.fi` | 404 | absent | nginx 404 — no `/v2/point` route (`/v2/lat/../lon/../dist/..` is also 404) |
+
+**In a real browser** (headless Chromium 141, page served at the production origin
+`https://micrologist.github.io/MicroRadar/` via request interception, so the
+`Origin` is genuinely the deployed one): all four hosts fail with
+`TypeError: Failed to fetch` and a "No 'Access-Control-Allow-Origin' header is
+present" console error.
+
+Three controls, because "no header" is an easy thing to get wrong:
+
+1. **The sandbox proxy is not stripping the header.** `https://api.adsb.lol/0/me`
+   — same host, same proxy, same `curl` — *does* return
+   `access-control-allow-origin: https://www.adsb.lol` and
+   `access-control-allow-methods: GET, POST, OPTIONS`. So ACAO survives the proxy
+   intact; `/v2/point` genuinely sends none. (Responses from the other hosts also
+   arrived with `x-frame-options`, `nel`, `report-to` and `alt-svc` untouched.)
+2. **The network path is fine — it is CORS and nothing else.** The same browser
+   fetch with `mode: 'no-cors'` **succeeds** against all four hosts, returning an
+   opaque response. The request leaves, the response comes back, and only the CORS
+   policy prevents the page from reading it. Not DNS, not TLS, not connectivity.
+3. **It is not origin-allowlisting.** `/v2/point` returns no ACAO for
+   `Origin: https://www.adsb.lol` or `https://adsb.lol` either — i.e. not even for
+   adsb.lol's own front end. Preflight `OPTIONS /v2/point/...` answers **405**.
+   The `/v2/*` routes appear to have no CORS middleware at all, whereas `/0/*`
+   does (locked to `https://www.adsb.lol`).
+
+**Caveat on IP-based blocking.** This sandbox is a datacentre IP (Cloudflare
+`cf-ray` colo `IAD`), not a UK mobile network. `api.adsb.lol` answering 200 here
+does **not** guarantee it answers 200 from the phone, and the 403s from
+`airplanes.live` / `adsb.one` may be partly IP/ASN reputation rather than a blanket
+public shutdown. What *is* IP-independent is the CORS result: a missing
+`Access-Control-Allow-Origin` blocks every browser from every network, so the
+phone cannot succeed where this sandbox failed.
+
+**Method note.** Playwright's Chromium does not trust the sandbox's TLS-intercepting
+proxy CA by default and first failed with `ERR_CERT_AUTHORITY_INVALID`, which looks
+like a fetch failure but is not a CORS result. It was launched with
+`--ignore-certificate-errors-spki-list` pinned to the SHA-256 SPKI hashes of the two
+CAs in `/root/.ccr/agent-proxy-ca.crt`, so that exact proxy is trusted and every other
+certificate is still verified normally. Verification was not disabled. This matters
+only inside the sandbox; nothing about it affects the phone.
+
+**Conclusion, and the open decision.** `index.html` is not at fault — the URL shape,
+the polling and the fallback all behave correctly; the data is simply unreadable from
+a browser. `CLAUDE.md` names adsb.lol and airplanes.live as *the* data source and
+forbids working around a CORS block, so **M1 cannot be completed as specified** and
+the brief itself has to change. That is the repo owner's call, not an implementation
+detail. No code or `CLAUDE.md` change was made in this session.
 
 ### What was verified in the sandbox
 
