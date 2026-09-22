@@ -347,11 +347,77 @@ limited to what runs without network:
 
 ## Results (fill in after implementation)
 
-_To be written by the implementation session before milestone 2 is planned._
+_Written by the implementation session. The sandbox has no route to either
+aggregator, so everything below marked **UNVERIFIED** still needs a real device._
 
-- CORS: 
-- Which source answered first, typical response time: 
-- Sample raw aircraft object from the console: 
-- Fields that were missing or surprising: 
-- iPhone Safari observations (geolocation prompt, background behaviour, layout): 
-- Anything that had to deviate from this plan and why: 
+- **CORS: UNVERIFIED.** The implementation sandbox blocks both API hosts the same
+  way the planning sandbox did — the egress proxy answers CONNECT with HTTP 403,
+  so no request ever leaves the machine. That is a sandbox policy, not a CORS
+  result: nothing here either confirms or contradicts the aggregators' headers.
+  The first real `fetch()` from `https://micrologist.github.io/MicroRadar/` is
+  still the open question, and it is the first thing to check on the phone. If
+  both hosts fail with a CORS error there, stop and report per `CLAUDE.md`; do
+  not add a proxy.
+- **Which source answered first, typical response time: UNVERIFIED.** No live call
+  was made.
+- **Sample raw aircraft object from the console: UNVERIFIED.** `poll()` logs the
+  first raw entry of the first successful response once
+  (`raw aircraft sample from <source>:`). Open Safari's Web Inspector against the
+  phone, or check the console on desktop, and paste it here.
+- **Fields that were missing or surprising: UNVERIFIED.** Specifically still open:
+  how often `alt_geom` is present, whether `flight` really is space-padded, and
+  what `seen_pos` looks like for MLAT-only targets.
+- **iPhone Safari observations: UNVERIFIED.** All device checks are pending.
+
+### What was verified in the sandbox
+
+Headless Chromium (Playwright, 390x844 viewport) against `python3 -m http.server`,
+plus the pure functions run in Node with a small DOM stub:
+
+- Cold load: no console errors, no page errors, no placeholder text left, no
+  horizontal overflow, body text 16px, buttons 44.4px tall.
+- `locate()` with a mocked fix fills `#me` and flips the button to
+  "Refresh position". Denying the permission leaves the page intact and shows
+  "Location permission denied" in red.
+- The polled URL comes out as
+  `https://api.adsb.lol/v2/point/51.5007/-0.1246/40` — 4 dp as planned.
+- `normalise()` against hand-written entries: padded callsign trimmed, `"ground"`
+  becomes altitude 0 with `onGround`, entries with no `lat`/`lon` or
+  `seen_pos > 60` dropped, missing callsign falls back to registration then hex.
+- `toENU()` and the bearing match the plan's hand-computed cases: 1111.9 m north
+  for 0.01° at the equator, 556.0 m east for 0.01° at lat 60, 74080 m for 40 nm,
+  11582 m up for 38000 ft.
+- `extrapolate()`: 2315 m after 10 s at 450 kt, clamped at `STALE_S`, altitude
+  tracks `baro_rate`, input never mutated, unchanged when on the ground or when
+  `track`/`gs` are missing.
+- Rendering a stubbed response: sorted nearest first, stale entry dropped, and a
+  callsign of `<img src=x onerror=alert(1)>` renders as text with no dialog.
+- With a stubbed source, distance creeps ~0.23 km every 500 ms and snaps back on
+  each 8 s poll — extrapolation and reset both work.
+- Automatic fallback: with the primary aborting, the next poll uses
+  airplanes.live and the button label follows. Manually toggling back onto the
+  broken source shows the error while the last good list stays on screen with its
+  age in `#meta`.
+- `visibilitychange`: zero requests while hidden, exactly one on return.
+
+### Deviations from the plan
+
+- `describe()` also returns `gsText` and an `ageText`, and formats the vertical
+  rate as `↑ climbing 1,200 ft/min`, so the second line of each `<li>` matches the
+  sample layout in the plan. The plan left the exact strings to the implementer.
+- `render()` calls `renderMe()` each tick so the fix age counts up rather than
+  freezing at the value it had when the fix arrived.
+- The automatic source switch goes through a small `setSource(i)` helper so the
+  button label cannot drift out of sync with `state.sourceIndex`. The plan asked
+  for that behaviour without naming a function.
+- `FPM_TO_MPS` is declared as the plan's constant table requires but is unused:
+  `extrapolate()` works in feet and ft/min throughout and only converts at the
+  `toENU()` boundary. Milestone 2 will probably want it.
+- `EARTH_R` is the name used for the plan's `R`, to avoid a one-letter global.
+
+### Still to do on the phone
+
+Acceptance criteria 1-10 in this plan have not been run on an iPhone. Criteria
+2, 6 and 10 were checked in desktop Chromium at phone viewport size; criteria 3,
+4, 5, 7, 8 and 9 were checked against stubbed responses only, so they confirm the
+app logic but not the live API.
