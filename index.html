@@ -109,8 +109,9 @@
     // The aggregators send no Access-Control-Allow-Origin header on their /v2/*
     // routes, so a browser is never allowed to read the response even though the
     // JSON itself is fine (see docs/plan-m1.md, "API verification"). Requests go
-    // through a small Cloudflare Worker that adds the header. Deploy it once and
-    // put its URL here, with no trailing slash — see proxy/README.md.
+    // through a small proxy (Cloudflare Worker or Val Town val — same code) that
+    // adds the header. Deploy one and put its URL here, with no trailing slash —
+    // see proxy/README.md.
     const PROXY_BASE = 'https://microradar-proxy.throbbing-mountain-edd5.workers.dev';
 
     const SOURCES = [

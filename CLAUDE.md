@@ -46,10 +46,12 @@ network problem (a `no-cors` fetch returns an opaque response fine). Full eviden
 is in the "API verification" section of `docs/plan-m1.md`.
 
 Because of that, and by an explicit decision on 2026-09-22, requests go through a
-small Cloudflare Worker in `proxy/` that forwards to these two hosts and adds the
-header. `index.html` has a single `PROXY_BASE` constant pointing at it; see
-`proxy/README.md` to deploy. This overrides the original "no backend" rule, which
-was written before the CORS behaviour was known.
+small proxy in `proxy/` that forwards to these two hosts and adds the header. It
+comes as a Cloudflare Worker (`worker.js`) and an equivalent Val Town val
+(`valtown.ts`) — same code, different egress IP, because adsb.lol rate-limited the
+Worker. `index.html` has a single `PROXY_BASE` constant pointing at whichever is in
+use; see `proxy/README.md` to deploy either. This overrides the original "no
+backend" rule, which was written before the CORS behaviour was known.
 
 Keep the proxy dumb: GET only, these two upstreams only, `/v2/*` only, known
 origins only, no keys, no caching, no added features. It must forward a descriptive

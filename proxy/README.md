@@ -1,7 +1,15 @@
 # MicroRadar CORS proxy
 
-`worker.js` is a Cloudflare Worker that sits in front of the ADS-B aggregators and
-adds the CORS header they don't send.
+A tiny proxy that sits in front of the ADS-B aggregators and adds the CORS header
+they don't send. Two interchangeable builds of the same ~100 lines:
+
+- `worker.js` — Cloudflare Worker (the original; currently what `PROXY_BASE` points at).
+- `valtown.ts` — Val Town HTTP val, added so the proxy can run from a different
+  egress IP. Through the Worker, adsb.lol answered `HTTP 429` on the phone, and the
+  leading theory is that Cloudflare Workers share their outbound IPs with every
+  other Workers customer (see `docs/plan-m1.md`, "On the phone, round 1").
+
+They differ only in the export at the bottom. Keep them in step.
 
 ## Why this is here
 
@@ -12,9 +20,9 @@ evidence is in the "API verification" section of `docs/plan-m1.md`.
 
 This is a deliberate relaxation of the "no backend" rule in `CLAUDE.md`. It is the
 only server-side piece in the project, it holds no keys or secrets, and the site
-still works by opening `index.html` once `PROXY_BASE` points at a deployed Worker.
+still works by opening `index.html` once `PROXY_BASE` points at a deployed proxy.
 
-## Deploy (dashboard, no tooling — works from an iPad)
+## Deploy A: Cloudflare Worker (dashboard, no tooling — works from an iPad)
 
 1. Sign in at <https://dash.cloudflare.com> → **Workers & Pages** → **Create** →
    **Workers** → **Create Worker**.
@@ -32,6 +40,30 @@ still works by opening `index.html` once `PROXY_BASE` points at a deployed Worke
 
 The free plan allows 100,000 requests/day. MicroRadar polls every 8 s, so it uses
 about 450/hour — you would have to leave it open for nine hours a day to notice.
+
+## Deploy B: Val Town (browser only — also works from an iPad)
+
+1. Sign in at <https://www.val.town> → **New** → **HTTP val**.
+2. Name it something like `microradarProxy`, delete the placeholder code, and
+   paste the contents of `valtown.ts` over it. It saves and deploys as you type.
+3. Copy the val's URL — Val Town shows it above the editor, ending in
+   `.web.val.run` (or `.val.run`; take whatever it displays).
+4. Put it in `index.html` as `PROXY_BASE`, **without a trailing slash**, exactly as
+   for the Worker. Nothing else in `index.html` changes: the val serves the same
+   `/<source>/v2/...` path shape at the root of its own hostname.
+5. Commit and push. To go back, set `PROXY_BASE` to the Worker URL again.
+
+Quick check before touching `index.html`: in Safari, open the val's URL with the
+path `/adsb.lol/v2/point/51.5/-0.12/40` appended. It will say `Origin not allowed`
+— that is the origin guard working, and it proves the val is up. To see what
+adsb.lol actually returns through it you need a request that carries
+`Origin: https://micrologist.github.io` — the app itself is the easiest way, and
+since the status line shows the upstream body, a 429 will explain itself there.
+
+Free-plan request and runtime limits were not verifiable from the sandbox that
+wrote this (val.town is blocked there); check the pricing page. For scale,
+MicroRadar's polling is ~450 requests/hour while the page is open and zero when
+it isn't.
 
 ## What it allows
 

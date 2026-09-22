@@ -10,6 +10,8 @@
  * It is deliberately NOT a general-purpose open proxy — only the two upstreams
  * named in CLAUDE.md, only GET, only /v2/* paths, only known origins.
  *
+ * valtown.ts is the same code for Val Town; keep the two in step.
+ *
  * Deploy: see proxy/README.md.
  */
 
