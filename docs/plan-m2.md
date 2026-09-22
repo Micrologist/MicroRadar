@@ -510,5 +510,122 @@ Do not commit any of the probe tooling.
 
 ## Results
 
-_To be filled in by the implementation session: what worked, what Safari did, the
-gesture mapping observed, memory/battery notes, and which CDN ended up in the tags._
+_Written by the implementation session, 2026-09-22. Everything below is headless
+Chromium 141 at 390x844 (deviceScaleFactor 2, WebGL 2 via SwiftShader) against the
+real cdnjs and the real OpenStreetMap tiles, with a mocked Westminster fix and a
+stubbed poll response. **Nothing here is an iPhone.** See "Still to do on the
+phone"._
+
+### The CDN question is settled: cdnjs
+
+The sandbox's egress policy now allows `cdnjs.cloudflare.com` and
+`tile.openstreetmap.org`, so the plan's main unknown was answered directly rather
+than through the npm mirror. All four check URLs answer **200 with
+`access-control-allow-origin: *`**:
+
+| URL under `https://cdnjs.cloudflare.com/ajax/libs/cesium/1.145.0/` | result |
+| --- | --- |
+| `Widgets/widgets.css` | 200, `text/css` |
+| `Cesium.js` | 200, **6,018,837 B** — byte-identical in size to the npm build the probe measured |
+| `Workers/createVerticesFromHeightmap.js` | 200, `application/javascript` |
+| `Assets/approximateTerrainHeights.json` | 200, `application/json` |
+| `Assets/IAU2006_XYS/IAU2006_XYS_18.json` | 200, `application/json` |
+
+So the three tags point at cdnjs, the jsdelivr fallback is not used, and
+`CLAUDE.md` needs no change.
+
+### What the browser did
+
+- **Cold load:** globe up with OSM tiles in **4.3 s** (first visit, nothing
+  cached, through the sandbox's egress proxy).
+- **Hosts contacted:** `cdnjs.cloudflare.com` (28 requests: the library, the CSS,
+  the JSON assets and ~25 worker chunks), `tile.openstreetmap.org`, the page's own
+  origin, and two blob worker URLs. **No ion, no other host.**
+  `Cesium.Ion.defaultAccessToken` reads `""` at runtime.
+- **Ground:** one user point, 3 ring polylines, 7 ground labels (3 distances +
+  N/E/S/W), camera at heading 0, pitch -45.4 deg, 42,567 m up — i.e. 60,000 m
+  from the user, north up.
+- **Aircraft**, from a stubbed response built from the milestone 1 sample:
+
+  | case | result |
+  | --- | --- |
+  | airliner, `alt_geom` 16,525 ft, 366 kt, track 321 | orange dot at 5,065 m, stalk shown, nose line 5,664 m (366 kt x 30 s = 5,652 m), label `RYR7ZW` |
+  | `alt_baro: "ground"` | grey dot at height 0, **no stalk, no nose line**, does not move between polls |
+  | no `track`, only `calc_track` | moves 169 m in 3 s at 110 kt (expected 170 m) — the `calc_track` fallback works |
+  | no altitude at all | grey dot at height 0, no stalk, still listed as `alt ?` |
+  | present in poll 1, absent from poll 2 | mark gone: 4 marks, 5 points (4 + the user), 4 labels, 8 lines |
+
+- **Movement:** positions advance every frame and snap on each poll; measured
+  563 m in 3 s for a 366 kt target (expected 565 m).
+- **Cost:** `updateScene()` with **200 aircraft is 0.8 ms median, 8.6 ms worst**
+  of 50 calls, in software-rendered Chromium. The plan's 1.4-1.9 ms estimate was
+  pessimistic. A phone's GPU does the drawing; this is the JS.
+- **Camera:** left-drag orbits (range to the user stays exactly 60,000 m while
+  latitude/longitude change), wheel zooms and clamps at **299 m** and
+  **397,813 m** against limits of 300 m and 400,000 m, and "Recentre" restores
+  the initial camera **exactly** (same position, height, heading and pitch).
+  A flick leaves Cesium's inertia running for a moment, so a recentre pressed
+  during the spin lands a degree or two off and settles.
+- **Resize:** portrait 366x506 CSS px, landscape 712x300 (the `min-height: 300px`
+  wins over `60vh` at 390 px tall), back to 366x506. The drawing buffer always
+  matches the CSS size exactly and the frustum aspect ratio follows, so no
+  distortion; no horizontal page overflow in either orientation.
+  `touch-action` computes to `none` on the canvas, from Cesium's own CSS.
+- **Backgrounding:** zero polls while `document.hidden`, exactly one on return,
+  no Cesium error panel afterwards.
+- **Network loss after a fix:** red status
+  `adsb.lol: Failed to fetch · retrying in 16s`, marks and list both stay, and
+  the marks keep extrapolating until `STALE_S` and then freeze.
+- **Fallbacks**, each one exercised:
+
+  | failure | at page load | after that |
+  | --- | --- | --- |
+  | script tag pointed at a bogus host | red `3D library failed to load — list only` | scene `display: none`, list polls and renders normally |
+  | Chromium launched with `--disable-3d-apis` | red `3D unavailable (The browser supports WebGL, but initialization failed.) — list only` | same |
+  | `tile.openstreetmap.org` blocked | normal | globe shows `baseColor` and the rings, labels, user and aircraft all still read — this is what `IMAGERY_URL = ''` would look like |
+
+### Deviations from the plan
+
+1. **Ring colour and width.** The plan says white, alpha 0.35, width 1. On the
+   screenshot that is *invisible* over OSM tiles — only the "10 km" labels showed.
+   Changed to black at alpha 0.5, width 2, which reads over map, sea and the plain
+   globe. Acceptance criterion 2 needs the rings to be visible; the constant was
+   the thing in the way.
+2. **The credit container needed CSS.** `widgets.css` gives
+   `.cesium-widget-credits` `position: absolute; bottom: 0; left: 0` unless it is
+   inside a `.cesium-viewer` element. Ours is not, so it anchored to the page and
+   sat on top of the map and the list. `#credits .cesium-widget-credits {
+   position: static }` puts it back in the flow, and criterion 10 then holds.
+3. **The OSM credit is created explicitly**, with `showOnScreen: true`:
+   `credit: new Cesium.Credit('© <a ...>OpenStreetMap</a> contributors', true)`.
+   Without it Cesium hides the attribution behind its "Data attribution" lightbox
+   link, which is not "visible" in the sense OSM's tile policy means.
+4. **`RING_HEIGHT_FT`** exists because `cartesianOf()` takes feet and
+   `RING_HEIGHT_M` is metres; it is just `RING_HEIGHT_M / FT_TO_M` computed once.
+5. **`AC_COLOR`/`GROUND_COLOR` are parsed into `Cesium.Color` once**
+   (`view3d.airColor`, `view3d.groundColor`) instead of per aircraft per poll.
+6. **`view3d.warned`** is the `Set` behind "console.warn once per hex".
+7. `FPM_TO_MPS` was deleted, as the plan allows.
+
+### Unknowns, updated
+
+| Unknown | Now |
+| --- | --- |
+| Does cdnjs carry 1.145.0 with `Workers/` and `Assets/`? | **Answered: yes**, with `ACAO: *`. |
+| OSM tiles from a phone | Tiles fetch fine from the sandbox and render. The phone is still untested, but the blocked-tile path was exercised and degrades cleanly. |
+| iOS Safari memory | **Still unknown.** Knobs unchanged: `globe.maximumScreenSpaceError`, `viewer.resolutionScale`, `IMAGERY_URL = ''`. |
+| Gestures on iOS with a `lookAt` transform | Desktop equivalents confirmed (left-drag orbits at constant range, wheel zooms within the limits). Touch mapping still unverified. |
+| Label sharpness | `useBrowserRecommendedResolution` confirmed: the drawing buffer is 366x506 at `deviceScaleFactor: 2`, i.e. CSS pixels. So labels *will* be rendered at 1x on a 3x phone screen. Whether that looks soft is still a phone question. |
+| Battery at 30 fps | **Still unknown.** `targetFrameRate` reads 30 at runtime. |
+| `coords.altitude` on iOS | **Still unknown**; the user is drawn at height 0. |
+| Double-tap zoom on iOS | `touch-action: none` is confirmed on the canvas. Whether that is enough for Safari is still unverified. |
+| Landscape resize | Confirmed in Chromium: canvas, drawing buffer and frustum all follow the container, both ways. iOS `vh` behaviour still unverified. |
+
+### Still to do on the phone
+
+Acceptance criteria 1-12 have not been run on an iPhone. Criteria 2, 3, 4, 8, 9,
+10 and 12 were checked in desktop Chromium at phone viewport size against stubbed
+data; criteria 5 and 7 were checked with a mouse and a viewport resize, which is
+not a finger and not an orientation change; criteria 1, 6 and 11 (first-load time
+on a phone network, double-tap zoom, and heat/memory after ten minutes) can only
+be answered on the device.
