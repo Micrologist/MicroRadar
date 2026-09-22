@@ -380,9 +380,31 @@
         : `No data yet · source ${src}`;
     }
 
+    // ---- source toggle --------------------------------------------------
+
+    function toggleSource() {
+      setSource((state.sourceIndex + 1) % SOURCES.length);
+      if (state.me) startPolling();
+    }
+
+    // ---- background handling --------------------------------------------
+
+    // iOS suspends timers in a backgrounded tab anyway; this keeps the first poll
+    // after returning prompt and avoids a burst of queued requests.
+    function onVisibilityChange() {
+      if (document.hidden) {
+        clearTimeout(state.pollTimer);
+        state.pollTimer = null;
+      } else if (state.me) {
+        startPolling();
+      }
+    }
+
     // ---- page load ------------------------------------------------------
 
     $('btn-locate').addEventListener('click', locate);
+    $('btn-source').addEventListener('click', toggleSource);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     setSource(state.sourceIndex);
     setInterval(render, TICK_MS);
     setStatus('Tap "Find me" to start');
