@@ -85,6 +85,15 @@
       font-size: 12px;
       color: var(--dim);
     }
+    /* Outside a .cesium-viewer, widgets.css positions this absolutely at the
+       bottom left of the page, where it lands on top of the map and the list.
+       Put it back in the flow so it sits in the footer, as it should. */
+    #credits .cesium-widget-credits {
+      position: static;
+      font-size: 12px;
+      color: inherit;
+      text-shadow: none;
+    }
     #credits a { color: var(--dim); }
     #credits img { height: 14px; vertical-align: middle; }
 
@@ -530,7 +539,14 @@
 
         const viewer = new Cesium.Viewer('scene', {
           baseLayer: IMAGERY_URL
-            ? new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({ url: IMAGERY_URL }))
+            ? new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({
+                url: IMAGERY_URL,
+                // showOnScreen, so the attribution OSM's tile policy asks for is
+                // on the page rather than behind Cesium's "Data attribution" link.
+                credit: new Cesium.Credit(
+                  '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+                  true),
+              }))
             : false,
           terrain: undefined,   // plain ellipsoid; Cesium World Terrain needs ion
           animation: false, timeline: false, geocoder: false, homeButton: false,
@@ -601,7 +617,10 @@
         outlineWidth: 1,
       });
 
-      const ringColor = Cesium.Color.WHITE.withAlpha(0.35);
+      // Dark, not white: over pale OpenStreetMap tiles a thin white line at low
+      // alpha is invisible (the plan's 1 px white at 0.35 could not be seen at
+      // all). Black at 0.5 reads over map and sea alike.
+      const ringColor = Cesium.Color.BLACK.withAlpha(0.5);
       for (const km of RING_KM) {
         const r = km * 1000;
         const positions = [];
@@ -612,7 +631,7 @@
         }
         view3d.ground.add({
           positions,
-          width: 1,
+          width: 2,
           material: Cesium.Material.fromType('Color', { color: ringColor }),
         });
         addGroundLabel(km + ' km', offsetLatLon(me.lat, me.lon, 0, r), '12px ui-monospace, monospace',
