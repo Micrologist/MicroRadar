@@ -6,8 +6,8 @@
  * Workers customer, which is the leading theory for the HTTP 429s adsb.lol
  * returned through the Worker (see docs/plan-m1.md, "On the phone, round 1").
  *
- * Deliberately NOT a general-purpose open proxy — only the two upstreams named
- * in CLAUDE.md, only GET, only /v2/* paths, only known origins. Keep this file
+ * Deliberately NOT a general-purpose open proxy — only the upstream named in
+ * CLAUDE.md, only GET, only /v2/* paths, only known origins. Keep this file
  * and worker.js in step; they should differ only in the export at the bottom.
  *
  * Deploy: see proxy/README.md.
@@ -15,7 +15,9 @@
 
 const UPSTREAMS: Record<string, string> = {
   'adsb.lol': 'https://api.adsb.lol',
-  'airplanes.live': 'https://api.airplanes.live',
+  // airplanes.live was here until 2026-09-22; its API is gated behind an email
+  // to contact@airplanes.live and answered 403 throughout. Re-add it here and
+  // in index.html if they grant access.
 };
 
 const ALLOWED_ORIGINS = [

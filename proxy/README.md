@@ -74,8 +74,8 @@ read from the sandbox that wrote this.
 Deliberately not an open proxy:
 
 - **GET only.** Anything else gets 405.
-- **Two upstreams only**, `adsb.lol` and `airplanes.live` (the ones named in
-  `CLAUDE.md`), selected by the first path segment.
+- **One upstream only**, `adsb.lol` (the one named in `CLAUDE.md`), selected by
+  the first path segment. The map is a map so a second one is a one-line add.
 - **`/v2/*` paths only.**
 - **Known origins only** — `https://micrologist.github.io` plus
   `http://localhost:*` / `http://127.0.0.1:*` for local work. Anything else gets
@@ -92,13 +92,18 @@ reads as `adsb.lol: HTTP 403` in the app instead of a mystery network failure.
 
 ```
 https://<worker>/adsb.lol/v2/point/51.5/-0.12/40
-https://<worker>/airplanes.live/v2/point/51.5/-0.12/40
-        └─ upstream ─┘└──────── forwarded verbatim ────────┘
+        └ upstream ┘└──────── forwarded verbatim ────────┘
 ```
 
-## Note on airplanes.live
+## airplanes.live was removed (2026-09-22)
 
-As of 2026-09-22 `api.airplanes.live` answers **403** to this sandbox with
-`Please contact us at contact@airplanes.live...`, so the fallback source is
-currently dead no matter what the proxy does. The Worker still routes it, so it
-will start working if you mail them and get access. `adsb.lol` works today.
+It was the fallback upstream. Its API is not deprecated — their status page shows
+it healthy — but it is gated: `api.airplanes.live` answers **403** with
+`Please contact us at contact@airplanes.live. Your email MUST include any links, a
+description of the project...` until they approve you. It answered 403 throughout,
+and a dead fallback was actively costing polls (each adsb.lol 429 flipped to it,
+failed, and flipped back: three polls lost instead of one), so it was removed.
+
+To bring it back after they grant access: one entry in `UPSTREAMS` in both proxy
+files, a second entry and the source toggle in `index.html` (see git history at
+2026-09-22), and the `Fallback` line in `CLAUDE.md`.

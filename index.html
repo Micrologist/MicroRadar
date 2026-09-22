@@ -81,7 +81,6 @@
 
     <div id="controls">
       <button id="btn-locate" type="button">Find me</button>
-      <button id="btn-source" type="button">adsb.lol</button>
     </div>
 
     <div id="me">No position yet.</div>
@@ -114,16 +113,16 @@
     // see proxy/README.md.
     const PROXY_BASE = 'https://micrologist--25362770b69011f19e211607ee4eb77e.web.val.run';   // Val Town; Worker: https://microradar-proxy.throbbing-mountain-edd5.workers.dev
 
-    const SOURCES = [
-      { name: 'adsb.lol', path: (lat, lon, r) => `/adsb.lol/v2/point/${lat}/${lon}/${r}` },
-      { name: 'airplanes.live', path: (lat, lon, r) => `/airplanes.live/v2/point/${lat}/${lon}/${r}` },
-    ];
+    // airplanes.live was the fallback until 2026-09-22. It gates API access behind
+    // an email to contact@airplanes.live and answered 403 throughout, and a dead
+    // fallback cost three polls per adsb.lol 429, so it was removed rather than
+    // left in. See CLAUDE.md "Data source" to bring it back.
+    const SOURCE = { name: 'adsb.lol', path: (lat, lon, r) => `/adsb.lol/v2/point/${lat}/${lon}/${r}` };
 
     // ---- state ----------------------------------------------------------
 
     const state = {
       me: null,          // { lat, lon, accuracy, at }
-      sourceIndex: 0,
       aircraft: [],      // normalised aircraft from the last successful poll
       lastPollAt: 0,
       lastError: null,
@@ -211,7 +210,7 @@
         setStatus('No proxy configured — set PROXY_BASE in index.html (see proxy/README.md)', true);
         return;
       }
-      const src = SOURCES[state.sourceIndex];
+      const src = SOURCE;
       const url = PROXY_BASE + src.path(state.me.lat.toFixed(4), state.me.lon.toFixed(4), RADIUS_NM);
       const ctl = new AbortController();
       const abortTimer = setTimeout(() => ctl.abort(), 10000);
@@ -245,23 +244,17 @@
         state.failures++;
         state.lastError = src.name + ': ' + why;
         setStatus(state.lastError + ' · retrying in ' + Math.round(nextDelayMs() / 1000) + 's', true);
-        setSource((state.sourceIndex + 1) % SOURCES.length);  // try the other one next
       } finally {
         clearTimeout(abortTimer);
         if (gen === pollGen) state.pollTimer = setTimeout(startPolling, nextDelayMs());
       }
     }
 
-    // Normal cadence while healthy; back off when a source keeps refusing, so a
+    // Normal cadence while healthy; back off when the source keeps refusing, so a
     // rate limit is not answered by hammering it every 8 seconds.
     function nextDelayMs() {
       if (!state.failures) return POLL_MS;
       return Math.min(POLL_MS * Math.pow(2, state.failures), MAX_BACKOFF_MS);
-    }
-
-    function setSource(i) {
-      state.sourceIndex = i;
-      $('btn-source').textContent = SOURCES[i].name;
     }
 
     // ---- normalising ----------------------------------------------------
@@ -409,17 +402,10 @@
         )).join('');
       }
 
-      const src = SOURCES[state.sourceIndex].name;
+      const src = SOURCE.name;
       $('meta').textContent = state.lastPollAt
         ? `${rows.length} aircraft · updated ${Math.round((now - state.lastPollAt) / 1000)}s ago · source ${src}`
         : `No data yet · source ${src}`;
-    }
-
-    // ---- source toggle --------------------------------------------------
-
-    function toggleSource() {
-      setSource((state.sourceIndex + 1) % SOURCES.length);
-      if (state.me) startPolling();
     }
 
     // ---- background handling --------------------------------------------
@@ -438,9 +424,7 @@
     // ---- page load ------------------------------------------------------
 
     $('btn-locate').addEventListener('click', locate);
-    $('btn-source').addEventListener('click', toggleSource);
     document.addEventListener('visibilitychange', onVisibilityChange);
-    setSource(state.sourceIndex);
     setInterval(render, TICK_MS);
     setStatus(PROXY_BASE
       ? 'Tap "Find me" to start'

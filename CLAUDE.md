@@ -28,8 +28,12 @@ Keep everything small, boring and finishable.
 
 Community ADS-B aggregators, free and unauthenticated, ADSBExchange v2 response format:
 
-- Primary: `https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}`
-- Fallback: `https://api.airplanes.live/v2/point/{lat}/{lon}/{radius_nm}`
+- `https://api.adsb.lol/v2/point/{lat}/{lon}/{radius_nm}`
+
+`api.airplanes.live` was the fallback until 2026-09-22 and was removed: its API is
+healthy but gated behind an email to `contact@airplanes.live`, it answered 403
+throughout, and a dead fallback cost three polls per adsb.lol 429 instead of one.
+If access is ever granted, re-add it (see `proxy/README.md`).
 
 Rate limit is 1 request/second. Poll every 5–10 s, never faster. Radius ~ 30–60 nm.
 
@@ -46,14 +50,14 @@ network problem (a `no-cors` fetch returns an opaque response fine). Full eviden
 is in the "API verification" section of `docs/plan-m1.md`.
 
 Because of that, and by an explicit decision on 2026-09-22, requests go through a
-small proxy in `proxy/` that forwards to these two hosts and adds the header. It
+small proxy in `proxy/` that forwards to this host and adds the header. It
 comes as a Cloudflare Worker (`worker.js`) and an equivalent Val Town val
 (`valtown.ts`) — same code, different egress IP, because adsb.lol rate-limited the
 Worker. `index.html` has a single `PROXY_BASE` constant pointing at whichever is in
 use; see `proxy/README.md` to deploy either. This overrides the original "no
 backend" rule, which was written before the CORS behaviour was known.
 
-Keep the proxy dumb: GET only, these two upstreams only, `/v2/*` only, known
+Keep the proxy dumb: GET only, this upstream only, `/v2/*` only, known
 origins only, no keys, no caching, no added features. It must forward a descriptive
 `User-Agent` — `api.adsb.lol` answers `403 User-Agent too generic` without one.
 If a future aggregator serves proper CORS headers, delete the proxy and go direct.

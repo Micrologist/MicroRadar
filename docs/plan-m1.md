@@ -636,6 +636,19 @@ that. Left as is for now; it is a tuning decision, not a fault.
 
 Still unverified: the phone itself.
 
+### Round 3 (2026-09-22): airplanes.live removed
+
+Checked whether the fallback was deprecated: it is not — airplanes.live's status
+repo (updated the same day) shows `api.airplanes.live` healthy at 99.95% uptime.
+It is *gated*: 403 with "contact us at contact@airplanes.live" until approved, and
+their API guide and homepage 403 the sandbox's IP too. By the owner's decision it
+was removed rather than kept as a dead fallback, because each adsb.lol 429 flipped
+to it, failed, and flipped back — three polls lost per miss instead of one. With a
+single source a 429 now costs exactly one poll (8 → 16 s). `SOURCES` became
+`SOURCE`, the source toggle button and `setSource`/`toggleSource` are gone, and
+both proxy builds forward only `adsb.lol`. It can come back with one email; the
+README in `proxy/` says where the lines go.
+
 ### What was verified in the sandbox
 
 Headless Chromium (Playwright, 390x844 viewport) against `python3 -m http.server`,

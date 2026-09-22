@@ -5,7 +5,6 @@ flying overhead in 3D, and (eventually) lets you point the phone at a plane to i
 
 Single static `index.html`, no build step, hosted on GitHub Pages.
 
-Aircraft data from the community ADS-B aggregators [adsb.lol](https://adsb.lol) and
-[airplanes.live](https://airplanes.live).
+Aircraft data from the community ADS-B aggregator [adsb.lol](https://adsb.lol).
 
 See `CLAUDE.md` for the project brief and milestones.

@@ -7,7 +7,7 @@
  * docs/plan-m1.md for the evidence. This Worker is the smallest thing that
  * fixes it: it forwards the request and adds the header.
  *
- * It is deliberately NOT a general-purpose open proxy — only the two upstreams
+ * It is deliberately NOT a general-purpose open proxy — only the upstream
  * named in CLAUDE.md, only GET, only /v2/* paths, only known origins.
  *
  * valtown.ts is the same code for Val Town; keep the two in step.
@@ -17,7 +17,9 @@
 
 const UPSTREAMS = {
   'adsb.lol': 'https://api.adsb.lol',
-  'airplanes.live': 'https://api.airplanes.live',
+  // airplanes.live was here until 2026-09-22; its API is gated behind an email
+  // to contact@airplanes.live and answered 403 throughout. Re-add it here and
+  // in index.html if they grant access.
 };
 
 const ALLOWED_ORIGINS = [
