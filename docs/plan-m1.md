@@ -494,12 +494,55 @@ CAs in `/root/.ccr/agent-proxy-ca.crt`, so that exact proxy is trusted and every
 certificate is still verified normally. Verification was not disabled. This matters
 only inside the sandbox; nothing about it affects the phone.
 
-**Conclusion, and the open decision.** `index.html` is not at fault — the URL shape,
-the polling and the fallback all behave correctly; the data is simply unreadable from
-a browser. `CLAUDE.md` names adsb.lol and airplanes.live as *the* data source and
-forbids working around a CORS block, so **M1 cannot be completed as specified** and
-the brief itself has to change. That is the repo owner's call, not an implementation
-detail. No code or `CLAUDE.md` change was made in this session.
+**A second, unrelated finding: `api.adsb.lol` does enforce a `User-Agent` policy.**
+A request with a blank UA, or `User-Agent: node`, gets
+`403 User-Agent too generic; include valid contact info.` This confirms the rumour
+that was collected earlier — but it is *not* what breaks the phone: an iPhone Safari
+UA gets a clean 200, as do `curl/8.5.0` and a descriptive project UA. It only matters
+for non-browser callers, which now includes the proxy below. Worth knowing; it was
+the first thing to bite when the Worker was tested from Node.
+
+**Conclusion.** `index.html` was not at fault — the URL shape, the polling and the
+fallback all behaved correctly; the data was simply unreadable from a browser.
+
+### Resolution (2026-09-22): CORS proxy, by explicit decision
+
+The evidence above was put to the repo owner, who chose to **relax the "no backend"
+hard constraint** rather than abandon the named data sources. `CLAUDE.md` has been
+updated to say so; it is a deliberate change to the brief, not a workaround smuggled
+into the implementation.
+
+`proxy/worker.js` is a Cloudflare Worker that forwards to the two aggregators and
+adds the missing header. `index.html` gained a single `PROXY_BASE` constant and now
+builds URLs as `PROXY_BASE + /<source>/v2/point/...`; everything else — polling,
+normalising, extrapolation, the source toggle — is untouched. Deployment notes are
+in `proxy/README.md`. The Worker is GET-only, restricted to these two upstreams,
+`/v2/*` paths and known origins, so it is not a general open proxy, and it forwards
+a descriptive `User-Agent` because of the finding above.
+
+Verified by running the Worker's handler against the live upstream and driving the
+real page with headless Chromium at a 390x844 viewport and a mocked Westminster fix:
+
+- Cross-origin `fetch()` through the Worker returns `type: "cors"`, HTTP 200 and a
+  readable body — 162 aircraft, the exact call that failed before.
+- The full app renders: `OK · adsb.lol`, **163 aircraft**, sorted nearest first,
+  e.g. `VLG368N A320 · 4,198 ft · 2.6 km · SSE (163°) · ↓ descending 576 ft/min`.
+  No console errors, no page errors, no horizontal overflow, and rows still creep
+  between polls, so extrapolation survived the change.
+- Guards behave: a disallowed `Origin` gets 403, an unknown upstream 404, a non
+  `/v2/` path 404, a `POST` 405.
+- With `PROXY_BASE` left empty (as committed), the app says
+  `No proxy configured — set PROXY_BASE in index.html (see proxy/README.md)` in red
+  instead of repeating the old mystery failure.
+- `airplanes.live` still answers **403** through the proxy, but that 403 is now
+  *readable*, so the app reports `airplanes.live: HTTP 403` rather than
+  `Load failed`. The fallback source stays dead until they grant access; adsb.lol
+  works today.
+
+**Still unverified:** everything iPhone-specific. All of the above is desktop
+Chromium at phone size, against a Worker running locally rather than on Cloudflare.
+The remaining steps are the owner's: deploy the Worker, set `PROXY_BASE`, push, and
+run acceptance criteria 1-10 on the actual phone.
 
 ### What was verified in the sandbox
 

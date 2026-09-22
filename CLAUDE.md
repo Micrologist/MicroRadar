@@ -11,11 +11,14 @@ Keep everything small, boring and finishable.
 
 - **Static site only.** Deployed via GitHub Pages from the repo root. No build step,
   no bundler, no npm, no framework. If it doesn't run by opening `index.html`, it's wrong.
+  The one exception is the CORS proxy in `proxy/` — see "Data source" below. It is
+  the only server-side code in the project and nothing else may be added to it.
 - **Single `index.html`** with inline CSS and JS. Split into a couple of files only if
   it genuinely gets unwieldy.
 - **Libraries** only via `<script>` tags from cdnjs, pinned to an exact version.
   three.js is fine (use the UMD/global build). Nothing else unless there's a strong reason.
-- **No API keys, no secrets, no backend.** Everything runs in the browser.
+- **No API keys, no secrets.** Everything except the CORS proxy runs in the browser,
+  and the proxy holds no credentials of any kind.
 - **Must work in Safari on iPhone and iPad** — that's the real target device.
   Desktop Chrome is for convenience only.
 - **HTTPS matters**: geolocation and device orientation only work on HTTPS (GitHub Pages
@@ -35,8 +38,23 @@ spaces), `t` (type), `r` (registration), `lat`, `lon`, `alt_baro` (ft, or the st
 `"ground"`), `alt_geom` (ft), `gs` (knots), `track` (deg), `baro_rate` (ft/min),
 `seen_pos` (seconds since last position).
 
-**First thing to verify:** that a plain browser `fetch()` to these endpoints works
-(CORS). If it doesn't, stop and report; don't silently add a proxy.
+**CORS: verified 2026-09-22, and it does not work.** Both hosts serve valid JSON
+but send no `Access-Control-Allow-Origin` header on `/v2/*`, so a browser is never
+allowed to read the response — on iPhone Safari that surfaces as `Load failed`. It
+is not origin-allowlisting (adsb.lol's own origin gets no header either) and not a
+network problem (a `no-cors` fetch returns an opaque response fine). Full evidence
+is in the "API verification" section of `docs/plan-m1.md`.
+
+Because of that, and by an explicit decision on 2026-09-22, requests go through a
+small Cloudflare Worker in `proxy/` that forwards to these two hosts and adds the
+header. `index.html` has a single `PROXY_BASE` constant pointing at it; see
+`proxy/README.md` to deploy. This overrides the original "no backend" rule, which
+was written before the CORS behaviour was known.
+
+Keep the proxy dumb: GET only, these two upstreams only, `/v2/*` only, known
+origins only, no keys, no caching, no added features. It must forward a descriptive
+`User-Agent` — `api.adsb.lol` answers `403 User-Agent too generic` without one.
+If a future aggregator serves proper CORS headers, delete the proxy and go direct.
 
 ## Coordinate handling
 

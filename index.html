@@ -105,9 +105,16 @@
     const TICK_MS = 500;         // re-render interval for extrapolation
     const EARTH_R = 6371000;     // metres
 
+    // The aggregators send no Access-Control-Allow-Origin header on their /v2/*
+    // routes, so a browser is never allowed to read the response even though the
+    // JSON itself is fine (see docs/plan-m1.md, "API verification"). Requests go
+    // through a small Cloudflare Worker that adds the header. Deploy it once and
+    // put its URL here, with no trailing slash — see proxy/README.md.
+    const PROXY_BASE = '';   // e.g. 'https://microradar-proxy.yourname.workers.dev'
+
     const SOURCES = [
-      { name: 'adsb.lol', url: (lat, lon, r) => `https://api.adsb.lol/v2/point/${lat}/${lon}/${r}` },
-      { name: 'airplanes.live', url: (lat, lon, r) => `https://api.airplanes.live/v2/point/${lat}/${lon}/${r}` },
+      { name: 'adsb.lol', path: (lat, lon, r) => `/adsb.lol/v2/point/${lat}/${lon}/${r}` },
+      { name: 'airplanes.live', path: (lat, lon, r) => `/airplanes.live/v2/point/${lat}/${lon}/${r}` },
     ];
 
     // ---- state ----------------------------------------------------------
@@ -191,8 +198,12 @@
 
     async function poll() {
       if (!state.me) return;
+      if (!PROXY_BASE) {
+        setStatus('No proxy configured — set PROXY_BASE in index.html (see proxy/README.md)', true);
+        return;
+      }
       const src = SOURCES[state.sourceIndex];
-      const url = src.url(state.me.lat.toFixed(4), state.me.lon.toFixed(4), RADIUS_NM);
+      const url = PROXY_BASE + src.path(state.me.lat.toFixed(4), state.me.lon.toFixed(4), RADIUS_NM);
       const ctl = new AbortController();
       const abortTimer = setTimeout(() => ctl.abort(), 10000);
 
@@ -407,7 +418,9 @@
     document.addEventListener('visibilitychange', onVisibilityChange);
     setSource(state.sourceIndex);
     setInterval(render, TICK_MS);
-    setStatus('Tap "Find me" to start');
+    setStatus(PROXY_BASE
+      ? 'Tap "Find me" to start'
+      : 'No proxy configured — set PROXY_BASE in index.html (see proxy/README.md)', !PROXY_BASE);
   </script>
 </body>
 </html>
