@@ -63,6 +63,28 @@ spaces), `t` (type), `r` (registration), `lat`, `lon`, `alt_baro` (ft, or the st
    coding, remembered last position in `localStorage` (guarded with try/catch,
    must work when empty).
 
+## Workflow: plan, then implement
+
+Each milestone is done in two separate sessions:
+
+1. **Planning session** writes `docs/plan-mN.md`: a detailed implementation plan
+   another model can follow without further context. Concrete steps, function names,
+   file structure, what to verify and how, acceptance criteria checkable on an iPhone,
+   plus an "Unknowns" section for anything that can't be verified from the sandbox
+   (anything iOS Safari specific). No implementation code in this session.
+2. **Implementation session** implements `docs/plan-mN.md` as written. If the plan
+   is wrong, ambiguous or conflicts with this file, stop and say so rather than
+   improvising around it.
+
+Results from a finished milestone (what worked, what the API actually returned,
+what Safari did) get noted at the bottom of that milestone's plan file before the
+next one is planned.
+
+## Deployment
+
+Hosted at `https://micrologist.github.io/MicroRadar/`. Because of the `/MicroRadar/`
+subpath, all paths must be relative — never `/style.css`, always `style.css`.
+
 ## Working style
 
 - Small commits, one milestone per branch/PR. Don't pre-build milestone 3 while
