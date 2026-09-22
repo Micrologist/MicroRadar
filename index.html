@@ -154,6 +154,7 @@
     const MAX_ZOOM_M = 400000;
     const RING_KM = [10, 25, 50];   // range rings on the ground
     const RING_HEIGHT_M = 5;     // just above the ellipsoid, so chords never dip below it
+    const RING_HEIGHT_FT = RING_HEIGHT_M / FT_TO_M;  // cartesianOf() works in feet
     const RING_SEGMENTS = 72;
     const NOSE_S = 30;           // heading line = where it will be in this many seconds
     const AC_COLOR = '#ffa500';      // airborne
@@ -238,6 +239,10 @@
       $('btn-locate').textContent = 'Refresh position';
       setStatus('Got a fix');
       renderMe();
+      if (view3d.ready) {
+        buildGround(state.me);
+        resetCamera();
+      }
       startPolling();
     }
 
@@ -378,6 +383,16 @@
         e: EARTH_R * dLon * cosLat,
         n: EARTH_R * dLat,
         u: (altFt ?? 0) * FT_TO_M,
+      };
+    }
+
+    // The inverse of toENU: move a point eM metres east and nM metres north on
+    // the same equirectangular approximation.
+    function offsetLatLon(lat, lon, eM, nM) {
+      const cosLat = Math.cos(lat * Math.PI / 180);
+      return {
+        lat: lat + (nM / EARTH_R) * 180 / Math.PI,
+        lon: lon + (eM / (EARTH_R * cosLat)) * 180 / Math.PI,
       };
     }
 
@@ -550,6 +565,82 @@
       }
     }
 
+    // The single place a position is handed to Cesium, so the argument order
+    // (longitude first) can only be wrong in one place. There is no terrain, so
+    // height 0 is the WGS84 ellipsoid, which is what alt_geom is measured from.
+    function cartesianOf(lat, lon, altFt) {
+      return Cesium.Cartesian3.fromDegrees(lon, lat, (altFt ?? 0) * FT_TO_M);
+    }
+
+    // Rebuilt on every fix: the user's dot, the range rings and the compass
+    // letters. Everything here is static until the user moves.
+    function buildGround(me) {
+      if (!view3d.ready) return;
+
+      view3d.ground.removeAll();
+      view3d.groundLabels.removeAll();
+      if (view3d.mePoint) view3d.points.remove(view3d.mePoint);
+
+      view3d.mePoint = view3d.points.add({
+        position: cartesianOf(me.lat, me.lon, 0),
+        pixelSize: 10,
+        color: Cesium.Color.fromCssColorString(ME_COLOR),
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 1,
+      });
+
+      const ringColor = Cesium.Color.WHITE.withAlpha(0.35);
+      for (const km of RING_KM) {
+        const r = km * 1000;
+        const positions = [];
+        for (let i = 0; i <= RING_SEGMENTS; i++) {
+          const th = (i / RING_SEGMENTS) * 2 * Math.PI;
+          const p = offsetLatLon(me.lat, me.lon, r * Math.sin(th), r * Math.cos(th));
+          positions.push(cartesianOf(p.lat, p.lon, RING_HEIGHT_FT));
+        }
+        view3d.ground.add({
+          positions,
+          width: 1,
+          material: Cesium.Material.fromType('Color', { color: ringColor }),
+        });
+        addGroundLabel(km + ' km', offsetLatLon(me.lat, me.lon, 0, r), '12px ui-monospace, monospace',
+                       Cesium.Color.WHITE.withAlpha(0.6));
+      }
+
+      const far = RING_KM[RING_KM.length - 1] * 1000 * 1.1;
+      ['N', 'E', 'S', 'W'].forEach((letter, i) => {
+        const th = i * Math.PI / 2;
+        addGroundLabel(letter, offsetLatLon(me.lat, me.lon, far * Math.sin(th), far * Math.cos(th)),
+                       'bold 16px -apple-system, system-ui, sans-serif', Cesium.Color.WHITE);
+      });
+    }
+
+    function addGroundLabel(text, pos, font, fillColor) {
+      view3d.groundLabels.add({
+        text,
+        position: cartesianOf(pos.lat, pos.lon, RING_HEIGHT_FT),
+        font,
+        fillColor,
+        style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+        outlineColor: Cesium.Color.BLACK,
+        outlineWidth: 2,
+        verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+        // Otherwise the curve of the globe swallows them at a low tilt.
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      });
+    }
+
+    // lookAt also installs a transform centred on the user, so the default
+    // controller orbits around them. Heading 0 puts the camera south of the user
+    // looking north, i.e. north up on the first view.
+    function resetCamera() {
+      if (!view3d.ready || !state.me) return;
+      view3d.viewer.camera.lookAt(
+        cartesianOf(state.me.lat, state.me.lon, 0),
+        new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(CAMERA_PITCH_DEG), CAMERA_RANGE_M)
+      );
+    }
+
     function failScene(text) {
       view3d.ready = false;
       view3d.error = text;
@@ -573,6 +664,7 @@
     // ---- page load ------------------------------------------------------
 
     $('btn-locate').addEventListener('click', locate);
+    $('btn-recentre').addEventListener('click', resetCamera);
     document.addEventListener('visibilitychange', onVisibilityChange);
     setInterval(render, TICK_MS);
 
