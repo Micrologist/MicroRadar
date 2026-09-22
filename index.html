@@ -201,6 +201,9 @@
       marks: new Map(),   // hex -> { point, label, stalk, nose }
       stalkMaterial: null,
       noseMaterial: null,
+      airColor: null,     // AC_COLOR and GROUND_COLOR as Cesium colours,
+      groundColor: null,  // parsed once instead of per aircraft per poll
+
       warned: new Set(),  // hexes already complained about, so a bad one warns once
     };
 
@@ -323,6 +326,7 @@
         state.lastError = null;
         state.failures = 0;
         setStatus('OK · ' + src.name);
+        syncMarks();
         render();
       } catch (err) {
         const why = err.name === 'AbortError' ? 'timed out' : err.message;
@@ -365,7 +369,10 @@
         altFt: altFt,
         onGround: raw.alt_baro === 'ground',
         gsKt: typeof raw.gs === 'number' ? raw.gs : null,
-        track: typeof raw.track === 'number' ? raw.track : null,
+        // track is missing on about a third of aircraft; some of those carry the
+        // aggregator's derived calc_track instead (see docs/plan-m1.md results).
+        track: typeof raw.track === 'number' ? raw.track
+             : typeof raw.calc_track === 'number' ? raw.calc_track : null,
         vsFpm: typeof raw.baro_rate === 'number' ? raw.baro_rate : 0,
         fixedAt: now - seenPos * 1000,
       };
@@ -403,24 +410,26 @@
       return COMPASS[Math.round(bearing / 22.5) % 16];
     }
 
-    // Advance a fix along its track so the numbers move between polls. Returns a
-    // copy; state.aircraft always holds the last real fix and is replaced wholesale
-    // on every poll, which is the "reset on each new fix" from CLAUDE.md.
-    function extrapolate(ac, now) {
+    // Move a fix dtS seconds along its track. Returns a copy; the input is never
+    // touched. The 3D heading line is the same maths with a fixed dt.
+    function advance(ac, dtS) {
       if (ac.gsKt === null || ac.track === null || ac.onGround) return ac;
 
-      const dt = Math.min(Math.max((now - ac.fixedAt) / 1000, 0), STALE_S);
-      const dist = ac.gsKt * KT_TO_MPS * dt;
+      const dist = ac.gsKt * KT_TO_MPS * dtS;
       const trackRad = ac.track * Math.PI / 180;
-      const dN = dist * Math.cos(trackRad);
-      const dE = dist * Math.sin(trackRad);
-
-      const lat = ac.lat + (dN / EARTH_R) * 180 / Math.PI;
-      const cosLat = Math.cos(ac.lat * Math.PI / 180);
-      const lon = ac.lon + (dE / (EARTH_R * cosLat)) * 180 / Math.PI;
-      const altFt = typeof ac.altFt === 'number' ? ac.altFt + ac.vsFpm * dt / 60 : ac.altFt;
+      const { lat, lon } = offsetLatLon(ac.lat, ac.lon,
+                                        dist * Math.sin(trackRad), dist * Math.cos(trackRad));
+      const altFt = typeof ac.altFt === 'number' ? ac.altFt + ac.vsFpm * dtS / 60 : ac.altFt;
 
       return { ...ac, lat, lon, altFt };
+    }
+
+    // Advance a fix to now so the numbers move between polls. state.aircraft always
+    // holds the last real fix and is replaced wholesale on every poll, which is the
+    // "reset on each new fix" from CLAUDE.md. Clamped at STALE_S, so an aircraft
+    // that stops reporting freezes instead of flying off.
+    function extrapolate(ac, now) {
+      return advance(ac, Math.min(Math.max((now - ac.fixedAt) / 1000, 0), STALE_S));
     }
 
     // ---- display --------------------------------------------------------
@@ -539,6 +548,7 @@
         scene.backgroundColor = Cesium.Color.fromCssColorString('#0b1020');
         scene.screenSpaceCameraController.minimumZoomDistance = MIN_ZOOM_M;
         scene.screenSpaceCameraController.maximumZoomDistance = MAX_ZOOM_M;
+        scene.preUpdate.addEventListener(updateScene);
 
         // Order matters only for what draws over what: rings first, then the
         // lines, then the dots and their labels.
@@ -556,6 +566,8 @@
         view3d.noseMaterial = Cesium.Material.fromType('Color', {
           color: Cesium.Color.fromCssColorString(AC_COLOR),
         });
+        view3d.airColor = Cesium.Color.fromCssColorString(AC_COLOR);
+        view3d.groundColor = Cesium.Color.fromCssColorString(GROUND_COLOR);
 
         view3d.viewer = viewer;
         view3d.ready = true;
@@ -639,6 +651,89 @@
         cartesianOf(state.me.lat, state.me.lon, 0),
         new Cesium.HeadingPitchRange(0, Cesium.Math.toRadians(CAMERA_PITCH_DEG), CAMERA_RANGE_M)
       );
+    }
+
+    // Once per poll: add a mark for every new aircraft, refresh the label and
+    // colour of the ones we already have, and drop the ones that have gone.
+    // Positions are left to updateScene() on the next frame.
+    function syncMarks() {
+      if (!view3d.ready) return;
+
+      const live = new Set();
+      for (const ac of state.aircraft) {
+        live.add(ac.hex);
+        let m = view3d.marks.get(ac.hex);
+        if (!m) {
+          m = {
+            point: view3d.points.add({ pixelSize: 8, color: Cesium.Color.WHITE }),
+            label: view3d.labels.add({
+              text: ac.callsign,
+              font: '13px -apple-system, system-ui, sans-serif',
+              fillColor: Cesium.Color.WHITE,
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+              pixelOffset: new Cesium.Cartesian2(0, -12),
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            }),
+            stalk: view3d.lines.add({ positions: [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO],
+                                      width: 1, material: view3d.stalkMaterial, show: false }),
+            nose: view3d.lines.add({ positions: [Cesium.Cartesian3.ZERO, Cesium.Cartesian3.ZERO],
+                                     width: 2, material: view3d.noseMaterial, show: false }),
+          };
+          view3d.marks.set(ac.hex, m);
+        }
+        // A callsign can turn up after the first sighting.
+        m.label.text = ac.callsign;
+        const airborne = !ac.onGround && typeof ac.altFt === 'number';
+        m.point.color = airborne ? view3d.airColor : view3d.groundColor;
+      }
+
+      for (const [hex, m] of view3d.marks) {
+        if (live.has(hex)) continue;
+        view3d.points.remove(m.point);
+        view3d.labels.remove(m.label);
+        view3d.lines.remove(m.stalk);
+        view3d.lines.remove(m.nose);
+        view3d.marks.delete(hex);
+      }
+    }
+
+    // Every frame: put each mark where its aircraft is now. The frame after a poll
+    // snaps every mark to the new fix, which is the reset CLAUDE.md asks for.
+    function updateScene() {
+      if (!state.me) return;
+      const now = Date.now();
+
+      for (const ac of state.aircraft) {
+        const m = view3d.marks.get(ac.hex);
+        if (!m) continue;
+        try {
+          const p = extrapolate(ac, now);
+          const pos = cartesianOf(p.lat, p.lon, p.altFt);
+          m.point.position = pos;
+          m.label.position = pos;
+
+          const airborne = !p.onGround && typeof p.altFt === 'number';
+          m.stalk.show = airborne;
+          if (airborne) m.stalk.positions = [pos, cartesianOf(p.lat, p.lon, 0)];
+
+          const hasTrack = p.gsKt !== null && p.track !== null && !p.onGround;
+          m.nose.show = hasTrack;
+          if (hasTrack) {
+            const q = advance(p, NOSE_S);
+            // Level on purpose: the line reads as a direction, not a climb.
+            m.nose.positions = [pos, cartesianOf(q.lat, q.lon, p.altFt)];
+          }
+        } catch (err) {
+          // This runs every frame; one bad aircraft must not stop the scene.
+          if (!view3d.warned.has(ac.hex)) {
+            view3d.warned.add(ac.hex);
+            console.warn('skipping ' + ac.hex + ' in the 3D scene:', err);
+          }
+        }
+      }
     }
 
     function failScene(text) {
