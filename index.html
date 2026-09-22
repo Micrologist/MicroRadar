@@ -212,7 +212,6 @@
       noseMaterial: null,
       airColor: null,     // AC_COLOR and GROUND_COLOR as Cesium colours,
       groundColor: null,  // parsed once instead of per aircraft per poll
-
       warned: new Set(),  // hexes already complained about, so a bad one warns once
     };
 
@@ -620,7 +619,9 @@
       // Dark, not white: over pale OpenStreetMap tiles a thin white line at low
       // alpha is invisible (the plan's 1 px white at 0.35 could not be seen at
       // all). Black at 0.5 reads over map and sea alike.
-      const ringColor = Cesium.Color.BLACK.withAlpha(0.5);
+      const ringMaterial = Cesium.Material.fromType('Color', {
+        color: Cesium.Color.BLACK.withAlpha(0.5),
+      });
       for (const km of RING_KM) {
         const r = km * 1000;
         const positions = [];
@@ -632,7 +633,7 @@
         view3d.ground.add({
           positions,
           width: 2,
-          material: Cesium.Material.fromType('Color', { color: ringColor }),
+          material: ringMaterial,
         });
         addGroundLabel(km + ' km', offsetLatLon(me.lat, me.lon, 0, r), '12px ui-monospace, monospace',
                        Cesium.Color.WHITE.withAlpha(0.6));
